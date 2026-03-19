@@ -132,7 +132,7 @@ auth := keycloak.NewKeycloakAuth(keycloak.Config{
 **Pattern**: `opensbt_{action}{Status}`
 
 **Control Plane Events** (requests):
-- `opensbt_onboardingRequest`
+- `opensbt_tenantCreated` - Tenant created (for billing/notifications)
 - `opensbt_offboardingRequest`
 - `opensbt_activateRequest`
 - `opensbt_deactivateRequest`
@@ -163,7 +163,7 @@ type Event struct {
 event := Event{
     ID:         uuid.New().String(),
     Version:    "1.0",
-    DetailType: "opensbt_onboardingRequest",
+    DetailType: "opensbt_tenantCreated",
     Source:     "zerosbt.control.plane",
     Time:       time.Now(),
     Detail: map[string]interface{}{
@@ -177,10 +177,12 @@ err := eventBus.Publish(ctx, event)
 
 ### Subscribing to Events
 ```go
-// Application Plane subscribes to requests
-err := eventBus.Subscribe(ctx, "opensbt_onboardingRequest", func(ctx context.Context, event Event) error {
+// Application Plane subscribes to non-infrastructure events
+err := eventBus.Subscribe(ctx, "opensbt_tenantCreated", func(ctx context.Context, event Event) error {
     tenantID := event.Detail["tenantId"].(string)
-    // Provision resources
+    // Setup billing, notifications, etc. (no infrastructure provisioning)
+    return billingProvider.CreateCustomer(ctx, tenantID)
+})
     // Publish success/failure event
     return nil
 })

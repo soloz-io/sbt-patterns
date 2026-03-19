@@ -219,7 +219,7 @@ controlPlane := zerosbt.NewControlPlane(zerosbt.ControlPlaneConfig{
 **Standard Events:**
 
 **Control Plane Events** (source: `zerosbt.control.plane`):
-- `opensbt_onboardingRequest` - Tenant onboarding initiated
+- `opensbt_tenantCreated` - Tenant created (for billing/notifications)
 - `opensbt_offboardingRequest` - Tenant offboarding initiated
 - `opensbt_activateRequest` - Tenant activation requested
 - `opensbt_deactivateRequest` - Tenant deactivation requested
@@ -257,11 +257,11 @@ type Event struct {
     Detail      map[string]interface{} `json:"detail"`
 }
 
-// Example: Onboarding Request Event
+// Example: Tenant Created Event
 {
     "id": "6a7e8feb-b491-4cf7-a9f1-bf3703467718",
     "version": "1.0",
-    "detailType": "opensbt_onboardingRequest",
+    "detailType": "opensbt_tenantCreated",
     "source": "zerosbt.control.plane",
     "time": "2026-03-16T18:43:48Z",
     "detail": {
@@ -276,12 +276,12 @@ type Event struct {
 **Event Flow Example:**
 ```
 1. Control Plane: Tenant registration API called
-2. Control Plane: Publishes opensbt_onboardingRequest to NATS
-3. Application Plane: Receives event, starts provisioning
-4. Application Plane: Provisions resources (Crossplane + ArgoCD)
-5. Application Plane: Publishes opensbt_provisionSuccess to NATS
-6. Control Plane: Receives event, updates tenant status
-7. Control Plane: Returns success to API caller
+2. Control Plane: Commits AINativeSaaS CR directly to Tenant Git Repository
+3. Control Plane: Returns success to API caller (Async processing begins)
+4. ArgoCD: Detects Git commit and syncs manifests
+5. Crossplane: Reconciles infrastructure (CAPI, CNPG, etc.)
+6. Status Controller: Watches K8s status and updates PostgreSQL DB to 'ready'
+7. Control Plane: Publishes opensbt_provisionSuccess to NATS for downstream non-infra services (e.g., Billing)
 ```
 
 
@@ -374,7 +374,8 @@ func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req Provisi
         },
     }
     
-    return p.client.Create(ctx, composition)
+    // Strict GitOps: Commit intent to Git repository
+    return p.gitClient.CommitManifest(ctx, req.TenantID, composition)
 }
 ```
 
@@ -409,7 +410,8 @@ func (p *ArgoWorkflowProvisioner) ProvisionTenant(ctx context.Context, req Provi
         },
     }
     
-    return p.client.Create(ctx, workflow, metav1.CreateOptions{})
+    // Strict GitOps: Commit intent to Git repository
+    return p.gitClient.CommitManifest(ctx, req.TenantID, workflow)
 }
 ```
 
@@ -1091,24 +1093,17 @@ func main() {
         log.Fatal(err)
     }
     
-    // Register event handlers
-    appPlane.OnOnboardingRequest(func(ctx context.Context, event zerosbt.OnboardingRequestEvent) error {
-        log.Printf("Provisioning tenant: %s", event.TenantID)
+    // Register event handlers for non-infrastructure coordination (5%)
+    appPlane.OnTenantCreated(func(ctx context.Context, event zerosbt.TenantCreatedEvent) error {
+        log.Printf("Initializing billing for new tenant: %s", event.TenantID)
         
-        // Provision tenant resources
-        result, err := provisioner.ProvisionTenant(ctx, zerosbt.ProvisionRequest{
-            TenantID: event.TenantID,
-            Tier:     event.Tier,
-            Name:     event.Name,
-            Email:    event.Email,
-        })
+        // Setup billing via external API (no direct K8s mutations)
+        err := billingProvider.CreateCustomer(ctx, event.TenantID, event.Email)
         if err != nil {
-            // Publish failure event
-            return appPlane.PublishProvisionFailure(ctx, event.TenantID, err)
+            return appPlane.PublishBillingFailure(ctx, event.TenantID, err)
         }
         
-        // Publish success event
-        return appPlane.PublishProvisionSuccess(ctx, event.TenantID, result)
+        return appPlane.PublishBillingSuccess(ctx, event.TenantID)
     })
     
     // Start Application Plane

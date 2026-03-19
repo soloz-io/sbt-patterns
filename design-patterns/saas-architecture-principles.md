@@ -68,7 +68,7 @@ Tenant provisioning must be fully automated through a single, repeatable process
 - Implement GitOps workflow: tenant creation → Git commit → ArgoCD sync
 - Provision tenant database schema via sqlc migrations
 - Create tenant identity in Ory Kratos/Keto automatically
-- Generate tenant-specific credentials and store in KSOPS-encrypted secrets
+- Generate tenant-specific credentials and store in Infisical, synced via External Secrets Operator (ESO).
 - Emit tenant lifecycle events to NATS for downstream processing
 
 **Onboarding Flow:**
@@ -282,7 +282,7 @@ Can user:user-456 execute agents on tenant:tenant-123?
 
 **Encryption:**
 - TLS 1.2+ for all endpoints (cert-manager)
-- Encrypt secrets in Git (KSOPS + Age)
+- Encrypt secrets at rest using Infisical (AES-256-GCM) and inject via External Secrets Operator. Credentials are never stored in Git.
 - PostgreSQL encryption at rest (CNPG configuration)
 - Encrypt S3 objects (Hetzner S3 server-side encryption)
 

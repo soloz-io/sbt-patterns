@@ -16,13 +16,13 @@ This steering document identifies common SaaS user needs and maps them to open-s
 
 **Implementation Approach:**
 ```go
-// Use open-sbt's IProvisioner abstraction
-provisioner := crossplane.NewCrossplaneProvisioner(crossplane.Config{
-    KubeConfig: kubeconfig,
+// Use open-sbt's GitOps IProvisioner abstraction
+provisioner := gitops.NewGitOpsProvisioner(gitops.Config{
+    RepoURL: "...",
 })
 
-// Provision tenant resources
-result, err := provisioner.ProvisionTenant(ctx, zerosbt.ProvisionRequest{
+// Commits tenant resources to Git (ArgoCD picks it up)
+result, err := provisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
     TenantID: "tenant-123",
     Tier:     "premium",
     Resources: []zerosbt.ResourceSpec{
@@ -48,22 +48,22 @@ result, err := provisioner.ProvisionTenant(ctx, zerosbt.ProvisionRequest{
 
 **Implementation Approach:**
 ```go
-// Control Plane publishes onboarding event
-controlPlane.CreateTenant(ctx, zerosbt.CreateTenantRequest{
-    Name:  "acme-corp",
-    Tier:  "premium", 
-    Email: "admin@acme.com",
-})
-// → Publishes opensbt_onboardingRequest to NATS
-
-// Application Plane subscribes and provisions
-appPlane.OnOnboardingRequest(func(ctx context.Context, event zerosbt.OnboardingRequestEvent) error {
-    return provisioner.ProvisionTenant(ctx, zerosbt.ProvisionRequest{
-        TenantID: event.TenantID,
-        Tier:     event.Tier,
-        Resources: getTenantResources(event.Tier),
+// Control Plane directly commits infrastructure intent to Git
+func (c *ControlPlane) CreateTenant(ctx context.Context, req zerosbt.CreateTenantRequest) error {
+    // 1. Save to PostgreSQL (Status: Pending)
+    c.db.InsertTenant(...)
+    
+    // 2. Strict GitOps: Commit intent to Git repository
+    err := c.gitopsProvisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
+        TenantID: req.TenantID,
+        Tier:     req.Tier,
     })
-})
+    
+    // 3. Publish NATS event for non-infra tasks (Billing, Notifications)
+    c.eventBus.Publish("opensbt_tenantCreated", req)
+    
+    return err
+}
 ```
 
 **Kubernetes Automation:**
