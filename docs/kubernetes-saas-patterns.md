@@ -44,22 +44,22 @@ result, err := provisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
 
 **User Need:** "I want automated tenant provisioning when new customers sign up"
 
-**open-sbt Pattern:** Use **Control Plane + Application Plane** with **IEventBus**
+**open-sbt Pattern:** Use **Hub Tenant Management API (Control Plane)** with **IProvisioner**
 
 **Implementation Approach:**
 ```go
-// Control Plane directly commits infrastructure intent to Git
+// Hub Tenant Management API commits infrastructure intent to Git
 func (c *ControlPlane) CreateTenant(ctx context.Context, req zerosbt.CreateTenantRequest) error {
     // 1. Save to PostgreSQL (Status: Pending)
     c.db.InsertTenant(...)
     
-    // 2. Strict GitOps: Commit intent to Git repository
+    // 2. Strict GitOps: Generate manifests and commit new tenant folder to central GitOps repo
     err := c.gitopsProvisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
         TenantID: req.TenantID,
         Tier:     req.Tier,
     })
     
-    // 3. Publish NATS event for non-infra tasks (Billing, Notifications)
+    // 3. Publish NATS event for non-infra side effects only (Billing, Notifications)
     c.eventBus.Publish("opensbt_tenantCreated", req)
     
     return err

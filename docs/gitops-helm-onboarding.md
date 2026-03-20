@@ -36,7 +36,7 @@ This design is the synthesis of our convergence analysis across six major archit
 The `open-sbt` toolkit provides the `IProvisioner` and `IEventBus` interfaces. The `zero-ops` platform implements these to execute the following architecture:
 
 ### 1. The GitOps Repository Structure
-All tenant infrastructure state lives in a single, centralized Git repository managed by the Application Plane.
+All tenant infrastructure state lives in a single, centralized Git repository managed by the Hub Tenant Management API.
 
 ```text
 gitops-repo/
@@ -55,7 +55,7 @@ gitops-repo/
 ```
 
 ### 2. The ArgoCD ApplicationSet
-A single ArgoCD `ApplicationSet` watches the `tenants/` directory. Whenever the `open-sbt` Application Plane commits a new folder, ArgoCD automatically generates an `Application` custom resource.
+A single ArgoCD `ApplicationSet` watches the `tenants/` directory. Whenever the Hub Tenant Management API commits a new folder, ArgoCD automatically generates an `Application` custom resource.
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -109,7 +109,7 @@ To successfully run this as a one-person AI-Native company, we implement three c
 
 ### Mitigation 2: Performance at Scale
 * **PostgreSQL RLS Optimization:** RLS is restricted to Shared Pool tiers. The `open-sbt` data layer uses `sqlc` to enforce strict `(tenant_id)` composite indexing on all queries, guaranteeing millisecond query times even with billions of rows. PostgREST provides additional REST API access for dashboards and reporting.
-* **Webhook-Driven Syncs (No Polling):** ArgoCD's 3-minute Git polling is disabled. The `open-sbt` Application Plane fires a direct Webhook to the ArgoCD API immediately after a Git commit, triggering instant reconciliation and eliminating API server thrashing.
+* **Webhook-Driven Syncs (No Polling):** ArgoCD's 3-minute Git polling is disabled. The Hub Tenant Management API fires a direct Webhook to the ArgoCD API immediately after committing to Git, triggering instant reconciliation and eliminating API server thrashing.
 
 ### Mitigation 3: Solving Onboarding Latency (The Warm Pool Pattern)
 Standard GitOps provisioning takes 45-80 seconds. `open-sbt` splits the onboarding flow into two latency-optimized paths:
@@ -120,13 +120,13 @@ Standard GitOps provisioning takes 45-80 seconds. `open-sbt` splits the onboardi
 3. **Instant Claim:** The Control Plane DB instantly marks `warm-pool-01` as belonging to `tenant-123`.
 4. **Auth Binding:** Ory Keto instantly creates the relationship `tenant:123#admin@user:xyz`.
 5. **Response:** API returns `200 OK` in < 2 seconds. The user can use the platform immediately.
-6. **Async Refill:** The Control Plane publishes a NATS event. The App Plane updates `warm-pool-01`'s `values.yaml` in Git to reflect its new owner, and commits a new `warm-pool-11` folder to Git to replace the consumed warm slot.
+6. **Async Refill:** The Hub Tenant Management API updates `warm-pool-01`'s `values.yaml` in Git to reflect its new owner, and commits a new `warm-pool-11` folder to Git to replace the consumed warm slot.
 
 #### Path B: Dedicated / BYOC Tiers (Premium / Enterprise) - Latency 2-5 Minutes
 1. **API Call:** User requests an Enterprise tier (Dedicated Hetzner CAPI Cluster or Dedicated CNPG Database).
 2. **Response:** API returns `202 Accepted` instantly.
 3. **AI UX Masking:** The frontend AI agent engages the user in a configuration conversation while the provisioning happens.
-4. **GitOps Execution:** The App Plane commits a new `tenants/<tenant-id>` folder to Git with `tier: enterprise`.
+4. **GitOps Execution:** The Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo with `tier: enterprise`.
 5. **Crossplane Provisioning:** ArgoCD syncs the Helm chart, which creates a Crossplane `TenantCluster` XR. Crossplane provisions the Hetzner nodes.
 6. **Event Streaming:** Progress is streamed back to the frontend Agent via NATS WebSockets until the cluster is ready.
 

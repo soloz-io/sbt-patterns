@@ -41,16 +41,15 @@ open-sbt is a Go-based SaaS builder toolkit for the zero-ops platform, inspired 
 - Event orchestration
 
 **Application Plane Responsibilities:**
-- Tenant resource provisioning
-- Tenant workload execution
-- Responding to Control Plane events
-- Tenant-specific infrastructure management
+- Tenant workload execution within the Spoke cluster
+- Responding to Control Plane events (non-infra coordination)
+- Tenant-specific runtime management within the Spoke
 
 
 **Communication Pattern:**
 ```
-Infrastructure Provisioning (95%): Control Plane → Git Commit → ArgoCD → Crossplane → Status Controller → PostgreSQL
-Coordination/Orchestration (5%): Control Plane → NATS Event → Application Plane (Cross-cluster, non-Git actions)
+Infrastructure Provisioning (95%): Hub Tenant Management API → Git Commit → ArgoCD → Crossplane → Spoke Cluster → Status Controller → PostgreSQL
+Coordination/Orchestration (5%): Control Plane → NATS Event → Application Plane (cross-cluster, non-Git actions)
 ```
 
 ### 2. Interface-Based Abstraction
@@ -275,13 +274,14 @@ type Event struct {
 
 **Event Flow Example:**
 ```
-1. Control Plane: Tenant registration API called
-2. Control Plane: Commits AINativeSaaS CR directly to Tenant Git Repository
-3. Control Plane: Returns success to API caller (Async processing begins)
-4. ArgoCD: Detects Git commit and syncs manifests
-5. Crossplane: Reconciles infrastructure (CAPI, CNPG, etc.)
-6. Status Controller: Watches K8s status and updates PostgreSQL DB to 'ready'
-7. Control Plane: Publishes opensbt_provisionSuccess to NATS for downstream non-infra services (e.g., Billing)
+1. Hub Tenant Management API: create_tenant received
+2. Hub Tenant Management API: Generates Helm values manifest and commits new tenant folder to central GitOps repo
+3. Hub Tenant Management API: Returns 202 Accepted to caller (async provisioning begins)
+4. ArgoCD (Hub): Detects Git commit and syncs manifests
+5. Crossplane: Reconciles infrastructure (CAPI, CNPG, etc.) — provisions Spoke cluster
+6. Spoke: Control Plane + Application Plane come up inside the Spoke
+7. Status Controller: Watches K8s status and updates PostgreSQL DB to 'ready'
+8. Hub Tenant Management API: Publishes opensbt_provisionSuccess to NATS for downstream non-infra services (e.g., Billing)
 ```
 
 
@@ -301,27 +301,28 @@ type Event struct {
 The zero-ops platform implements a dual-path onboarding strategy to optimize for different tenant tiers:
 
 **Path A: Shared Pool Tiers (Basic/Standard) - Latency < 2 Seconds**
-1. Application Plane maintains pre-provisioned "warm" tenant slots (warm-pool-01, warm-pool-02, etc.)
-2. Control Plane instantly claims an available warm slot for new tenant
+1. Hub Tenant Management API maintains pre-provisioned "warm" tenant slots (warm-pool-01, warm-pool-02, etc.) in Git
+2. Hub Tenant Management API instantly claims an available warm slot for the new tenant in PostgreSQL
 3. Ory Keto creates tenant authorization relationships immediately
 4. API returns success in < 2 seconds
-5. Async refill: Application Plane updates claimed slot's Git configuration and provisions new warm slot
+5. Async refill: Hub Tenant Management API updates the claimed slot's Git configuration and commits a new warm slot folder to replace it
 
 **Path B: Dedicated Tiers (Premium/Enterprise) - Latency 2-5 Minutes**
 1. API returns 202 Accepted immediately
-2. Application Plane commits new tenant folder to Git with dedicated tier configuration
-3. ArgoCD syncs Helm chart with Crossplane XRs for dedicated resources
-4. Progress streamed via NATS events until provisioning complete
+2. Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo
+3. ArgoCD syncs Helm chart with Crossplane XRs — provisions a dedicated Spoke cluster
+4. Each Spoke gets its own Control Plane + Application Plane deployed inside it
+5. Progress streamed via NATS events until provisioning complete
 
 **Standard Tenant Registration Workflow:**
 ```
-1. API receives request
+1. Hub Tenant Management API receives request
    → Inserts 'pending' record in PostgreSQL
-   → Commits AINativeSaaS CR to Git
-   
-2. ArgoCD & Crossplane
-   → Syncs and provisions infrastructure automatically
-   
+   → Generates manifests and commits new tenant folder to central GitOps repo
+
+2. ArgoCD (Hub) & Crossplane
+   → Syncs and provisions Spoke infrastructure automatically
+
 3. Status Controller (tenant-controller)
    → Watches K8s state and updates PostgreSQL to 'ready'
 ```
@@ -463,15 +464,15 @@ type ResourceSpec struct {
 
 **GitOps Workflow:**
 ```
-1. Control Plane receives tenant creation request
-2. Control Plane commits tenant configuration to Git repository
-3. ArgoCD ApplicationSet detects Git change via Directory Generator
-4. ArgoCD applies Universal Tenant Helm Chart
-5. Helm chart generates Kubernetes resources and Crossplane XRs
-6. Crossplane provisions infrastructure based on XRs
+1. Hub Tenant Management API receives create_tenant request
+2. Hub Tenant Management API generates Helm values manifest and commits new tenant folder to central GitOps repo
+3. ArgoCD ApplicationSet (Hub) detects Git change via Directory Generator
+4. ArgoCD applies Universal Tenant Helm Chart → provisions Spoke cluster
+5. Each Spoke gets its own Control Plane + Application Plane deployed inside it
+6. Crossplane provisions Spoke infrastructure based on XRs
 7. ArgoCD reports sync status
-8. Application Plane publishes success event
-9. Control Plane updates tenant status
+8. Status Controller updates tenant status in PostgreSQL to 'ready'
+9. Hub Tenant Management API publishes opensbt_provisionSuccess to NATS for non-infra side effects
 ```
 
 **Key Architectural Decision:**
