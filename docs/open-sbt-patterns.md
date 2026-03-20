@@ -32,9 +32,9 @@ fileMatchPattern: 'pkg/**/*|cmd/opensbt/**/*'
    - Yes → Define interface in `pkg/interfaces/`, implement in `pkg/providers/`
    - No → Implement directly in Control/App Plane
 
-3. **Does this trigger async operations?**
-   - Yes → Publish NATS event, implement handler in Application Plane
-   - No → Synchronous API call
+3. **Does this trigger infrastructure provisioning?**
+   - Yes → Hub Tenant Management API generates manifests and commits to central GitOps repo directly. Do NOT route through NATS for infrastructure.
+   - Non-infra side effect (billing, notifications) → Publish NATS event, implement handler in Application Plane (Spoke)
 
 4. **Is this a new provider implementation?**
    - Yes → Create `pkg/providers/{provider-name}/`, implement interface
@@ -177,14 +177,13 @@ err := eventBus.Publish(ctx, event)
 
 ### Subscribing to Events
 ```go
-// Application Plane subscribes to non-infrastructure events
+// Application Plane (Spoke) subscribes to non-infrastructure events only.
+// Infrastructure provisioning is NOT triggered via NATS — the Hub Tenant Management API
+// commits to Git directly. NATS is used only for side effects like billing and notifications.
 err := eventBus.Subscribe(ctx, "opensbt_tenantCreated", func(ctx context.Context, event Event) error {
     tenantID := event.Detail["tenantId"].(string)
-    // Setup billing, notifications, etc. (no infrastructure provisioning)
+    // Non-infra side effects only: billing, notifications, etc.
     return billingProvider.CreateCustomer(ctx, tenantID)
-})
-    // Publish success/failure event
-    return nil
 })
 ```
 
@@ -196,11 +195,12 @@ err := eventBus.Subscribe(ctx, "opensbt_tenantCreated", func(ctx context.Context
 | User management API | Control | Identity management |
 | Billing integration | Control | Financial operations |
 | MCP server | Control | Platform interface |
-| Cluster provisioning | Application | Infrastructure workload |
-| Database provisioning | Application | Tenant resource |
-| Application deployment | Application | Tenant workload |
-| Metrics collection | Application | Workload monitoring |
-| Event handlers | Application | Async operations |
+| Cluster provisioning (Git commit) | Control (Hub Tenant Management API) | Generates manifests and commits new tenant folder to central GitOps repo |
+| Cluster provisioning (runtime) | Application (Spoke) | Workloads running inside the provisioned Spoke cluster |
+| Database provisioning | Control (Hub Tenant Management API) | Committed to Git as Crossplane XR, provisioned by ArgoCD/Crossplane |
+| Application deployment | Application (Spoke) | Tenant workload running inside the Spoke |
+| Metrics collection | Application (Spoke) | Workload monitoring within the Spoke |
+| Event handlers (non-infra) | Application (Spoke) | Async side effects like billing, notifications |
 
 ## Provider Implementation Patterns
 
@@ -279,8 +279,8 @@ err := eventBus.Subscribe(ctx, "opensbt_tenantCreated", func(ctx context.Context
 ## Common Pitfalls and Solutions
 
 ### Pitfall 1: Mixing Control and Application Plane Logic
-**Problem**: Putting tenant provisioning logic in Control Plane API handlers
-**Solution**: Control Plane publishes event, Application Plane handles provisioning
+**Problem**: Bypassing GitOps by calling Kubernetes APIs directly from the Hub Tenant Management API, or delegating the Git commit to the Application Plane via a NATS event
+**Solution**: The Hub Tenant Management API (Control Plane) generates the Helm values manifest and commits the new tenant folder directly to the central GitOps repo. NATS events are published only for non-infrastructure side effects (billing, notifications). The Application Plane lives inside each Spoke cluster and handles tenant workload execution — it does NOT own the Git commit.
 
 ### Pitfall 2: Tight Coupling to Provider
 **Problem**: Using concrete provider types instead of interfaces

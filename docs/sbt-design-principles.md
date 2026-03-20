@@ -352,39 +352,41 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 
 **Strategy 1: Crossplane Compositions**
 ```go
+// GitOpsProvisioner is called by the Hub Tenant Management API (Control Plane).
+// It generates the Crossplane manifest and commits it to the central GitOps repo.
+// ArgoCD on the Hub picks it up and provisions the Spoke cluster.
 type CrossplaneProvisioner struct {
-    client client.Client
-    config CrossplaneConfig
+    gitClient GitClient
+    config    CrossplaneConfig
 }
 
 func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error) {
-    // Create Crossplane Composition
+    // Build the Crossplane Composition manifest
     composition := &compositionv1.Composition{
         ObjectMeta: metav1.ObjectMeta{
             Name: fmt.Sprintf("tenant-%s", req.TenantID),
         },
         Spec: compositionv1.CompositionSpec{
             Resources: []compositionv1.ComposedTemplate{
-                // Namespace
                 {Resource: createNamespaceTemplate(req)},
-                // PostgreSQL Database
                 {Resource: createDatabaseTemplate(req)},
-                // S3 Bucket
                 {Resource: createS3BucketTemplate(req)},
             },
         },
     }
     
-    // Strict GitOps: Commit intent to Git repository
+    // Hub Tenant Management API commits manifest to central GitOps repo
     return p.gitClient.CommitManifest(ctx, req.TenantID, composition)
 }
 ```
 
 **Strategy 2: Argo Workflows**
 ```go
+// ArgoWorkflowProvisioner is called by the Hub Tenant Management API (Control Plane).
+// It generates the Argo Workflow manifest and commits it to the central GitOps repo.
 type ArgoWorkflowProvisioner struct {
-    client dynamic.Interface
-    config ArgoConfig
+    gitClient GitClient
+    config    ArgoConfig
 }
 
 func (p *ArgoWorkflowProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error) {
@@ -1325,19 +1327,23 @@ func ProvisionTenant(ctx context.Context, req ProvisionRequest) error {
 }
 ```
 
-### 4. Always Emit Events for Async Operations
+### 4. Always Emit Events for Non-Infrastructure Async Operations
 ```go
-// ❌ DON'T: Block on long-running operations
-func OnboardTenant(ctx context.Context, req OnboardRequest) (*Tenant, error) {
-    tenant := createTenant(req)
-    provisionResources(tenant)  // Blocks for minutes
-    return tenant, nil
-}
-
-// ✅ DO: Emit event and return immediately
+// ❌ DON'T: Route infrastructure provisioning through NATS events
 func OnboardTenant(ctx context.Context, req OnboardRequest) (*Tenant, error) {
     tenant := createTenant(req)
     eventBus.Publish(ctx, OnboardingRequestEvent{TenantID: tenant.ID})
+    // ❌ Wrong: App Plane would then do the Git commit — this is the anti-pattern
+    return tenant, nil
+}
+
+// ✅ DO: Hub Tenant Management API commits to Git directly, then emits NATS for side effects only
+func OnboardTenant(ctx context.Context, req OnboardRequest) (*Tenant, error) {
+    tenant := createTenant(req)
+    // Infrastructure: commit new tenant folder to central GitOps repo
+    gitProvisioner.CommitTenantState(ctx, ProvisionRequest{TenantID: tenant.ID, Tier: tenant.Tier})
+    // Non-infra side effects only (billing, notifications)
+    eventBus.Publish(ctx, TenantCreatedEvent{TenantID: tenant.ID})
     return tenant, nil
 }
 ```

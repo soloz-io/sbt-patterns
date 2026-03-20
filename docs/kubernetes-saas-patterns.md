@@ -12,16 +12,18 @@ This steering document identifies common SaaS user needs and maps them to open-s
 
 **User Need:** "I want to deploy my SaaS application with proper tenant isolation on Kubernetes"
 
-**open-sbt Pattern:** Use the **IProvisioner** interface with Kubernetes-native provisioning
+**open-sbt Pattern:** Use the **IProvisioner** interface called from the **Hub Tenant Management API**
 
 **Implementation Approach:**
 ```go
-// Use open-sbt's GitOps IProvisioner abstraction
+// IProvisioner is implemented by the Hub Tenant Management API.
+// It generates Helm values / Crossplane manifests and commits a new tenant folder
+// to the central GitOps repo. ArgoCD on the Hub picks it up and syncs to the Spoke.
 provisioner := gitops.NewGitOpsProvisioner(gitops.Config{
     RepoURL: "...",
 })
 
-// Commits tenant resources to Git (ArgoCD picks it up)
+// Hub Tenant Management API commits tenant state to central GitOps repo
 result, err := provisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
     TenantID: "tenant-123",
     Tier:     "premium",
