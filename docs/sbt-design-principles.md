@@ -113,18 +113,23 @@ type IEventBus interface {
 }
 
 // IProvisioner - Tenant resource provisioning
+// ProvisionTenant commits an AINativeSaaS CR to the tenant's Git control plane repo
+// and returns immediately. It does NOT block on infrastructure readiness.
+// Status is reported asynchronously by the Spoke Controller (controller-runtime),
+// which watches Crossplane claim conditions and writes to Hub Centralised DB via PostgREST.
+// Callers MUST read status from the DB — never poll the provisioner.
 type IProvisioner interface {
-    // Provision tenant resources
+    // Provision tenant resources — commits to Git, returns 202-equivalent immediately
     ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error)
     
-    // Deprovision tenant resources
+    // Deprovision tenant resources — commits deletion to Git, Crossplane handles teardown
     DeprovisionTenant(ctx context.Context, req DeprovisionRequest) (*DeprovisionResult, error)
-    
-    // Get provisioning status
-    GetProvisioningStatus(ctx context.Context, tenantID string) (*ProvisioningStatus, error)
     
     // Update tenant resources
     UpdateTenantResources(ctx context.Context, req UpdateRequest) (*UpdateResult, error)
+    
+    // NOTE: GetProvisioningStatus is intentionally absent.
+    // Status is written by the Spoke Controller to Hub Centralised DB and read from there.
 }
 ```
 
@@ -280,8 +285,10 @@ type Event struct {
 4. ArgoCD (Hub): Detects Git commit and syncs manifests
 5. Crossplane: Reconciles infrastructure (CAPI, CNPG, etc.) — provisions Spoke cluster
 6. Spoke: Control Plane + Application Plane come up inside the Spoke
-7. Status Controller: Watches K8s status and updates PostgreSQL DB to 'ready'
-8. Hub Tenant Management API: Publishes opensbt_provisionSuccess to NATS for downstream non-infra services (e.g., Billing)
+7. Spoke Controller detects Crossplane claim Ready=True → writes status "ready" to Hub Centralised DB
+   via Hub-side PostgREST (Bearer JWT, RLS enforced)
+8. Spoke Controller publishes spoke.{tenant}.lifecycle.created to NATS Leaf Node
+9. Hub Event Router consumes event → triggers non-infra side effects (billing, notifications)
 ```
 
 
@@ -312,7 +319,7 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 2. Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo
 3. ArgoCD syncs Helm chart with Crossplane XRs — provisions a dedicated Spoke cluster
 4. Each Spoke gets its own Control Plane + Application Plane deployed inside it
-5. Progress streamed via NATS events until provisioning complete
+5. Spoke Controller watches Crossplane claim conditions and writes status updates to Hub Centralised DB via Hub-side PostgREST (Bearer JWT, RLS enforced)
 
 **Standard Tenant Registration Workflow:**
 ```
@@ -323,21 +330,27 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 2. ArgoCD (Hub) & Crossplane
    → Syncs and provisions Spoke infrastructure automatically
 
-3. Status Controller (tenant-controller)
-   → Watches K8s state and updates PostgreSQL to 'ready'
+3. Spoke Controller (controller-runtime)
+   → Watches Crossplane claim conditions (Ready=True)
+   → Writes status updates to Hub Centralised DB via Hub-side PostgREST
+   → Uses Bearer JWT with RLS enforcement for secure writes
 ```
 
 **Tenant Offboarding Workflow:**
 ```
 1. DELETE /tenants/{tenantId}
    → Updates tenant (status: deprovisioning)
-   → Publishes opensbt_offboardingRequest event
+   → Commits deletion to Git (removes tenant folder OR marks warm pool slot as available)
    
-2. Application Plane receives event
+2. ArgoCD & Crossplane
+   → Detects Git change and reconciles deletion
    → Deprovisions resources (returns to warm pool OR destroys dedicated resources)
-   → Publishes opensbt_deprovisionSuccess event
    
-3. Control Plane receives success event
+3. Spoke Controller
+   → Watches Crossplane claim deletion and writes final status to Hub Centralised DB via PostgREST
+   → Publishes opensbt_deprovisionSuccess event to NATS for non-infra side effects
+   
+4. Control Plane receives success event
    → Deletes tenant record
    → Deletes registration record
    → Returns success to caller
@@ -855,10 +868,14 @@ log.WithFields(log.Fields{
 - **Pattern**: Write SQL queries, generate Go code, use in applications
 
 **PostgREST Usage (Dashboards & Reporting):**
-- **Purpose**: Auto-generated REST API for frontend applications
+- **Purpose**: Auto-generated REST API for frontend applications and Spoke Controller writes
 - **Benefits**: No backend code needed, automatic API generation, RLS support
-- **Use Cases**: Admin dashboards, tenant portals, reporting interfaces
+- **Use Cases**: 
+  - Admin dashboards and tenant portals (read operations)
+  - Reporting interfaces (read operations)
+  - Spoke Controller status writes to Hub Centralised DB (write operations via Hub-side PostgREST)
 - **Pattern**: Define database schema, PostgREST exposes REST endpoints
+- **Deployment**: Two instances - Hub-side (accepts writes from Spoke Controllers) and Spoke-side (operational data, read-only)
 
 **Example Implementation:**
 ```go
@@ -942,6 +959,7 @@ open-sbt/
 │   │   ├── auth.go
 │   │   ├── eventbus.go
 │   │   ├── provisioner.go
+│   │   ├── controlplanestore.go  # IControlPlaneStore interface
 │   │   ├── storage.go
 │   │   ├── billing.go
 │   │   └── metering.go
@@ -952,7 +970,9 @@ open-sbt/
 │   │   ├── crossplane/      # Crossplane provisioner
 │   │   ├── argoworkflows/   # Argo Workflows provisioner
 │   │   ├── postgres/        # PostgreSQL storage implementation (sqlc)
-│   │   └── postgrest/       # PostgREST dashboard API implementation
+│   │   ├── postgrest/       # PostgREST dashboard API implementation
+│   │   ├── hubstore/        # HubStore (Spoke Pool - direct connection)
+│   │   └── localstore/      # LocalStore (Spoke Silo - local DB + NATS sync)
 │   │
 │   ├── controlplane/         # Control Plane components
 │   │   ├── controlplane.go  # Main Control Plane struct
@@ -966,6 +986,11 @@ open-sbt/
 │   │   ├── applicationplane.go
 │   │   ├── provisioner.go
 │   │   └── workflows.go
+│   │
+│   ├── spokecontroller/      # Spoke Controller (status sync)
+│   │   ├── controller.go    # Watches Crossplane claims
+│   │   ├── postgrest.go     # Writes to Hub via PostgREST
+│   │   └── reconciler.go    # Reconciliation logic
 │   │
 │   ├── events/               # Event definitions and handlers
 │   │   ├── definitions.go

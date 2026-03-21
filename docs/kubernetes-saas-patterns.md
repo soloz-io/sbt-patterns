@@ -138,16 +138,16 @@ rows, err := tenantDB.QueryContext(ctx, "SELECT * FROM orders")
 
 **Implementation Approach:**
 ```go
-// Tier-based provisioning in IProvisioner
-func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) error {
-    switch req.Tier {
-    case "basic":
-        return p.provisionBasicTier(ctx, req)
-    case "premium": 
-        return p.provisionPremiumTier(ctx, req)
-    case "enterprise":
-        return p.provisionEnterpriseTier(ctx, req)
-    }
+// Tier-based provisioning via IProvisioner — commits AINativeSaaS CR to Git.
+// Tier-specific resource expansion is handled by Crossplane Compositions, not Go code:
+//   spec.tier: starter    → Crossplane Composition A (shared pool, namespace isolation)
+//   spec.tier: enterprise → Crossplane Composition B (dedicated Spoke Silo cluster, BYOC)
+// ProvisionTenant commits to Git and returns immediately — it never blocks on infrastructure.
+func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error) {
+    cr := buildAINativeSaasCR(req.TenantID, req.Tier, req.Region, req.Cloud)
+    return p.gitClient.CommitManifest(ctx, req.TenantID, cr)
+    // Crossplane reconciles the correct Composition based on spec.tier.
+    // Status is reported asynchronously by the Spoke Controller via Hub-side PostgREST.
 }
 ```
 
@@ -180,10 +180,12 @@ logger.Info(ctx, "Order created", map[string]interface{}{
 ```
 
 **Kubernetes Observability Patterns:**
-- **VictoriaMetrics**: Tenant-tagged metrics collection
-- **OpenSearch**: Tenant-scoped log aggregation with field-based isolation
-- **Grafana Dashboards**: Per-tenant and global views
-- **Alert Manager**: Tenant-specific alerting rules
+- **VictoriaMetrics**: Tenant-tagged metrics — written by Grafana Alloy remote_write pipeline
+- **Loki**: Log aggregation — written by Grafana Alloy, queried via Grafana (Grafana-native pipeline)
+- **OpenSearch**: Event search and diagnostics — k8s-events, K8sGPT findings, infra-changes,
+  ArgoCD sync events. Not used for general log aggregation — Loki handles that.
+- **Grafana Dashboards**: Per-tenant and global views across VictoriaMetrics and Loki
+- **Alertmanager**: Tenant-specific alerting rules (driven by VictoriaMetrics vmalert)
 
 ### 7. Multi-Tenant CI/CD
 

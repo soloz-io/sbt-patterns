@@ -54,9 +54,16 @@ The architecture must scale without operational overhead as tenants are added.
 - Implement connection pooling (PgBouncer via CNPG) to handle database connections
 - Design stateless services that can scale horizontally
 - Use NATS for async communication to decouple services
-- Avoid per-tenant infrastructure provisioning (use shared pools with isolation)
+- Choose isolation strategy based on tenant tier — not a single model for all tenants
 
-**Anti-Pattern:** Creating dedicated infrastructure per tenant (breaks SaaS economics).
+**Tier-Based Infrastructure Strategy (Zero-Ops specific):**
+- **Starter/Growth (Spoke Pool):** Shared cluster, namespace isolation, RLS — correct for SaaS economics
+- **Enterprise/BYOC (Spoke Silo):** Dedicated CAPI cluster per tenant — deliberate product decision
+  for customers requiring physical isolation, data residency, and Hub-independent operation.
+  This is a selling point, not an anti-pattern.
+
+**Generic Anti-Pattern (still applies):** Dedicated infrastructure for shared-tier tenants
+who have not chosen or paid for isolation — that breaks SaaS economics.
 
 
 ### 4. Automated, Frictionless Tenant Onboarding
@@ -73,11 +80,14 @@ Tenant provisioning must be fully automated through a single, repeatable process
 
 **Onboarding Flow:**
 1. API receives tenant creation request (validated by JWT)
-2. Crossplane provisions tenant resources (namespace, database, S3 bucket)
-3. ArgoCD deploys tenant-specific configurations
-4. Ory Keto creates tenant authorization relationships
-5. NATS event triggers downstream setup (monitoring, billing)
-6. Return tenant credentials and endpoints
+2. Hub Tenant Management API commits AINativeSaaS CR to tenant's Git control plane repo
+   (returns 202 Accepted immediately — never blocks on provisioning)
+3. ArgoCD detects Git commit → syncs manifests to target cluster
+4. Crossplane reconciles AINativeSaaS CR → provisions resources (namespace, CNPG, S3 bucket, etc.)
+5. Spoke Controller watches Crossplane claim conditions → writes status to Hub Centralised DB
+6. Ory Keto creates tenant authorization relationships
+7. Hub Event Router consumes NATS lifecycle event → triggers non-infra side effects (billing, monitoring setup)
+8. Tenant status readable from Hub Centralised DB — frontend polls or receives SSE
 
 
 ### 5. Tenant-Aware Observability
@@ -715,8 +725,15 @@ Agent → MCP Client → MCP Server → Platform API → PostgreSQL
 
 **Pattern:**
 ```
-Tenant Request → NATS Queue → Kagents Worker → AgentSandbox → Agent Code
+MCP Client (Cursor/Goose)
+    → AgentGateway (JWT validation via auth-proxy)
+    → MCP Tool Server (authenticated, tenant-scoped)
+    → AgentSandbox (gVisor isolated execution)
+    → Agent Code
 ```
+
+NATS is NOT in the agent execution request path. NATS carries async side effects
+(billing events, lifecycle notifications) after execution completes — not the execution request itself.
 
 **Security Benefits:**
 - Tenant agents cannot escape sandbox
