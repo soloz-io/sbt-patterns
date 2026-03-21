@@ -203,7 +203,7 @@ auth := keycloak.NewKeycloakAuth(keycloakConfig)
 auth := custom.NewCustomAuth(customConfig)
 
 // Control plane works with any IAuth implementation
-controlPlane := zerosbt.NewControlPlane(zerosbt.ControlPlaneConfig{
+controlPlane := opensbt.NewControlPlane(opensbt.ControlPlaneConfig{
     Auth: auth,  // Interface, not concrete type
     EventBus: natsEventBus,
     Storage: postgresStorage,
@@ -217,7 +217,7 @@ controlPlane := zerosbt.NewControlPlane(zerosbt.ControlPlaneConfig{
 
 **Standard Events:**
 
-**Control Plane Events** (source: `zerosbt.control.plane`):
+**Control Plane Events** (source: `opensbt.control.plane`):
 - `opensbt_tenantCreated` - Tenant created (for billing/notifications)
 - `opensbt_offboardingRequest` - Tenant offboarding initiated
 - `opensbt_activateRequest` - Tenant activation requested
@@ -227,7 +227,7 @@ controlPlane := zerosbt.NewControlPlane(zerosbt.ControlPlaneConfig{
 - `opensbt_billingSuccess` - Billing operation succeeded
 - `opensbt_billingFailure` - Billing operation failed
 
-**Application Plane Events** (source: `zerosbt.application.plane`):
+**Application Plane Events** (source: `opensbt.application.plane`):
 - `opensbt_onboardingSuccess` - Tenant onboarded successfully
 - `opensbt_onboardingFailure` - Tenant onboarding failed
 - `opensbt_offboardingSuccess` - Tenant offboarded successfully
@@ -261,7 +261,7 @@ type Event struct {
     "id": "6a7e8feb-b491-4cf7-a9f1-bf3703467718",
     "version": "1.0",
     "detailType": "opensbt_tenantCreated",
-    "source": "zerosbt.control.plane",
+    "source": "opensbt.control.plane",
     "time": "2026-03-16T18:43:48Z",
     "detail": {
         "tenantId": "e6878e03-ae2c-43ed-a863-08314487318b",
@@ -1010,7 +1010,7 @@ import (
     "context"
     "log"
     
-    zerosbt "github.com/zero-ops/open-sbt/pkg"
+    opensbt "github.com/zero-ops/open-sbt/pkg"
     "github.com/zero-ops/open-sbt/pkg/providers/ory"
     "github.com/zero-ops/open-sbt/pkg/providers/nats"
     "github.com/zero-ops/open-sbt/pkg/providers/postgres"
@@ -1033,13 +1033,13 @@ func main() {
     storage := postgres.NewPostgresStorage(postgres.Config{
         Host:     "postgres",
         Port:     5432,
-        Database: "zerosbt",
-        User:     "zerosbt",
+        Database: "opensbt",
+        User:     "opensbt",
         Password: "password",
     })
     
     // Create Control Plane
-    controlPlane, err := zerosbt.NewControlPlane(ctx, zerosbt.ControlPlaneConfig{
+    controlPlane, err := opensbt.NewControlPlane(ctx, opensbt.ControlPlaneConfig{
         Auth:              auth,
         EventBus:          eventBus,
         Storage:           storage,
@@ -1068,7 +1068,7 @@ import (
     "context"
     "log"
     
-    zerosbt "github.com/zero-ops/open-sbt/pkg"
+    opensbt "github.com/zero-ops/open-sbt/pkg"
     "github.com/zero-ops/open-sbt/pkg/providers/nats"
     "github.com/zero-ops/open-sbt/pkg/providers/crossplane"
     "github.com/zero-ops/open-sbt/pkg/providers/argoworkflows"
@@ -1088,7 +1088,7 @@ func main() {
     })
     
     // Create Application Plane
-    appPlane, err := zerosbt.NewApplicationPlane(ctx, zerosbt.ApplicationPlaneConfig{
+    appPlane, err := opensbt.NewApplicationPlane(ctx, opensbt.ApplicationPlaneConfig{
         EventBus:    eventBus,
         Provisioner: provisioner,
     })
@@ -1097,7 +1097,7 @@ func main() {
     }
     
     // Register event handlers for non-infrastructure coordination (5%)
-    appPlane.OnTenantCreated(func(ctx context.Context, event zerosbt.TenantCreatedEvent) error {
+    appPlane.OnTenantCreated(func(ctx context.Context, event opensbt.TenantCreatedEvent) error {
         log.Printf("Initializing billing for new tenant: %s", event.TenantID)
         
         // Setup billing via external API (no direct K8s mutations)
@@ -1125,7 +1125,7 @@ package custom
 
 import (
     "context"
-    zerosbt "github.com/zero-ops/open-sbt/pkg/interfaces"
+    opensbt "github.com/zero-ops/open-sbt/pkg/interfaces"
 )
 
 type CustomAuth struct {
@@ -1133,19 +1133,19 @@ type CustomAuth struct {
     client *CustomAuthClient
 }
 
-func NewCustomAuth(config CustomAuthConfig) zerosbt.IAuth {
+func NewCustomAuth(config CustomAuthConfig) opensbt.IAuth {
     return &CustomAuth{
         config: config,
         client: NewCustomAuthClient(config),
     }
 }
 
-func (a *CustomAuth) CreateUser(ctx context.Context, user zerosbt.User) error {
+func (a *CustomAuth) CreateUser(ctx context.Context, user opensbt.User) error {
     // Custom implementation
     return a.client.CreateUser(ctx, user)
 }
 
-func (a *CustomAuth) AuthenticateUser(ctx context.Context, credentials zerosbt.Credentials) (*zerosbt.Token, error) {
+func (a *CustomAuth) AuthenticateUser(ctx context.Context, credentials opensbt.Credentials) (*opensbt.Token, error) {
     // Custom implementation
     return a.client.Authenticate(ctx, credentials)
 }
@@ -1158,7 +1158,7 @@ func main() {
         // Custom configuration
     })
     
-    controlPlane, err := zerosbt.NewControlPlane(ctx, zerosbt.ControlPlaneConfig{
+    controlPlane, err := opensbt.NewControlPlane(ctx, opensbt.ControlPlaneConfig{
         Auth: customAuth,  // Works seamlessly
         // ...
     })
@@ -1296,7 +1296,7 @@ func NewControlPlane(oryAuth *ory.OryAuth) *ControlPlane {
 }
 
 // ✅ DO: Depend on interfaces
-func NewControlPlane(auth zerosbt.IAuth) *ControlPlane {
+func NewControlPlane(auth opensbt.IAuth) *ControlPlane {
     // Works with any IAuth implementation
 }
 ```

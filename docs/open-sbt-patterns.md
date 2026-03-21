@@ -124,9 +124,9 @@ auth := keycloak.NewKeycloakAuth(keycloak.Config{
 ## Event Naming Conventions
 
 ### Event Sources
-- Control Plane: `zerosbt.control.plane`
-- Application Plane: `zerosbt.application.plane`
-- Custom: `zerosbt.custom.{service-name}`
+- Control Plane: `opensbt.control.plane`
+- Application Plane: `opensbt.application.plane`
+- Custom: `opensbt.custom.{service-name}`
 
 ### Event Detail Types
 **Pattern**: `opensbt_{action}{Status}`
@@ -151,7 +151,7 @@ type Event struct {
     ID         string                 `json:"id"`          // UUID
     Version    string                 `json:"version"`     // "1.0"
     DetailType string                 `json:"detailType"`  // opensbt_{action}{Status}
-    Source     string                 `json:"source"`      // zerosbt.{plane}
+    Source     string                 `json:"source"`      // opensbt.{plane}
     Time       time.Time              `json:"time"`        // RFC3339
     Detail     map[string]interface{} `json:"detail"`      // Event payload
 }
@@ -164,7 +164,7 @@ event := Event{
     ID:         uuid.New().String(),
     Version:    "1.0",
     DetailType: "opensbt_tenantCreated",
-    Source:     "zerosbt.control.plane",
+    Source:     "opensbt.control.plane",
     Time:       time.Now(),
     Detail: map[string]interface{}{
         "tenantId": tenantID,

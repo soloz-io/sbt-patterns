@@ -174,7 +174,7 @@ func (s *TenantService) UpdateTenantTier(ctx context.Context, tenantID, newTier 
     // 2. Publish tier change event
     return s.eventBus.Publish(ctx, Event{
         DetailType: "opensbt_tierChanged",
-        Source:     "zerosbt.control.plane",
+        Source:     "opensbt.control.plane",
         Detail: map[string]interface{}{
             "tenantId": tenantID,
             "oldTier":  oldTier,

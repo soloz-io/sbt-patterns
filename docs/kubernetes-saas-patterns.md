@@ -24,10 +24,10 @@ provisioner := gitops.NewGitOpsProvisioner(gitops.Config{
 })
 
 // Hub Tenant Management API commits tenant state to central GitOps repo
-result, err := provisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
+result, err := provisioner.CommitTenantState(ctx, opensbt.ProvisionRequest{
     TenantID: "tenant-123",
     Tier:     "premium",
-    Resources: []zerosbt.ResourceSpec{
+    Resources: []opensbt.ResourceSpec{
         {Type: "namespace", Name: "tenant-123"},
         {Type: "deployment", Name: "app-services"},
         {Type: "service", Name: "app-service"},
@@ -51,12 +51,12 @@ result, err := provisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
 **Implementation Approach:**
 ```go
 // Hub Tenant Management API commits infrastructure intent to Git
-func (c *ControlPlane) CreateTenant(ctx context.Context, req zerosbt.CreateTenantRequest) error {
+func (c *ControlPlane) CreateTenant(ctx context.Context, req opensbt.CreateTenantRequest) error {
     // 1. Save to PostgreSQL (Status: Pending)
     c.db.InsertTenant(...)
     
     // 2. Strict GitOps: Generate manifests and commit new tenant folder to central GitOps repo
-    err := c.gitopsProvisioner.CommitTenantState(ctx, zerosbt.ProvisionRequest{
+    err := c.gitopsProvisioner.CommitTenantState(ctx, opensbt.ProvisionRequest{
         TenantID: req.TenantID,
         Tier:     req.Tier,
     })
@@ -113,7 +113,7 @@ r.Use(tokenManager.GinMiddleware())
 // Use open-sbt's IStorage abstraction
 storage := postgres.NewPostgresStorage(postgres.Config{
     Host:     "postgres",
-    Database: "zerosbt",
+    Database: "opensbt",
 })
 
 // Use Database Isolation Helper library
@@ -194,9 +194,9 @@ logger.Info(ctx, "Order created", map[string]interface{}{
 **Implementation Approach:**
 ```go
 // open-sbt handles GitOps through IProvisioner
-provisioner.UpdateTenantResources(ctx, zerosbt.UpdateRequest{
+provisioner.UpdateTenantResources(ctx, opensbt.UpdateRequest{
     TenantID: "tenant-123",
-    Updates: []zerosbt.ResourceUpdate{
+    Updates: []opensbt.ResourceUpdate{
         {Type: "deployment", Name: "app", Image: "myapp:v2.1.0"},
     },
 })
