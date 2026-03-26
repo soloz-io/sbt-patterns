@@ -35,6 +35,8 @@ This design is the synthesis of our convergence analysis across six major archit
 
 The `open-sbt` toolkit provides the `IProvisioner` and `IEventBus` interfaces. The `zero-ops` platform implements these to execute the following architecture:
 
+**Note**: The `IEventBus` (NATS) is used for coordination events between Control Plane and Application Plane, not for status streaming. Status updates follow the Status Controller Pattern described below.
+
 ### 1. The GitOps Repository Structure
 All tenant infrastructure state lives in a single, centralized Git repository managed by the Hub Tenant Management API.
 
@@ -108,11 +110,25 @@ To successfully run this as a one-person AI-Native company, we implement three c
 * **AI-Operated Platform:** The platform is managed via the `zero-ops-api` MCP server. The Platform Admin's AI agent uses tools like `sync_application` to trigger GitOps syncs and `get_cluster_diagnostics` to debug.
 
 ### Mitigation 2: Performance at Scale
-* **PostgreSQL RLS Optimization:** RLS is restricted to Shared Pool tiers. The `open-sbt` data layer uses `sqlc` to enforce strict `(tenant_id)` composite indexing on all queries, guaranteeing millisecond query times even with billions of rows. PostgREST provides additional REST API access for dashboards and reporting.
+* **PostgreSQL RLS Optimization:** RLS is restricted to Shared Pool tiers. The `open-sbt` data layer uses `sqlc` to enforce strict `(tenant_id)` composite indexing on all queries, guaranteeing millisecond query times even with billions of rows. PostgREST provides additional REST API access for dashboards, reporting, and **Spoke Controller status writes to Hub Database**.
 * **Webhook-Driven Syncs (No Polling):** ArgoCD's 3-minute Git polling is disabled. The Hub Tenant Management API fires a direct Webhook to the ArgoCD API immediately after committing to Git, triggering instant reconciliation and eliminating API server thrashing.
 
 ### Mitigation 3: Solving Onboarding Latency (The Warm Pool Pattern)
 Standard GitOps provisioning takes 45-80 seconds. `open-sbt` splits the onboarding flow into two latency-optimized paths:
+
+### Status Controller Pattern
+
+The Zero-Ops Platform implements a strict **Status Controller Pattern** for all infrastructure status tracking:
+
+1. **Source of Truth**: Hub Database (PostgreSQL) contains all tenant and infrastructure status
+2. **Status Updates**: Spoke Controllers watch Crossplane claim conditions and write status to Hub DB via PostgREST
+3. **Status Reads**: Frontend/MCP tools read status directly from Hub Database
+4. **Real-time Updates**: Three options for real-time frontend updates:
+   - **Database Polling**: Frontend polls Hub Database at regular intervals
+   - **PostgREST Listening**: Use PostgREST's native listening capabilities for real-time updates
+   - **Hub Event Router**: Broadcasts DB `pg_notify` updates over NATS WebSockets
+
+**Critical Rule**: The database is always the source of truth. Direct NATS messages from Spoke to frontend bypass this pattern and should be avoided.
 
 #### Path A: Shared Pool Tiers (Basic / Standard) - Latency < 2 Seconds
 1. The `open-sbt` App Plane maintains a baseline of 10 "warm" (pre-provisioned) namespaces and Postgres schemas in the cluster.
@@ -128,7 +144,10 @@ Standard GitOps provisioning takes 45-80 seconds. `open-sbt` splits the onboardi
 3. **AI UX Masking:** The frontend AI agent engages the user in a configuration conversation while the provisioning happens.
 4. **GitOps Execution:** The Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo with `tier: enterprise`.
 5. **Crossplane Provisioning:** ArgoCD syncs the Helm chart, which creates a Crossplane `TenantCluster` XR. Crossplane provisions the Hetzner nodes.
-6. **Event Streaming:** Progress is streamed back to the frontend Agent via NATS WebSockets until the cluster is ready.
+6. **Status Updates:** Spoke Controller watches Crossplane claim conditions and writes status updates to Hub Database via PostgREST (Bearer JWT, RLS enforced).
+7. **Real-time Frontend Updates:** Frontend polls Hub Database for status updates OR uses PostgREST's native listening capabilities OR Hub Event Router broadcasts DB `pg_notify` updates over NATS WebSockets.
+
+**Important:** The **Hub Database remains the source of truth** for all status information. Real-time updates to the frontend must go through the database layer, not direct NATS messages from the Spoke.
 
 ---
 

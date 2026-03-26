@@ -21,7 +21,7 @@ open-sbt is a Go-based SaaS builder toolkit for the zero-ops platform, inspired 
 - Language: Go (not TypeScript/CDK)
 - Event Bus: NATS (not AWS EventBridge)
 - Auth: Ory Stack (not AWS Cognito)
-- Provisioning: Crossplane + ArgoCD + Argo Workflows (not CloudFormation + CodeBuild)
+- Provisioning: Crossplane + ArgoCD GitOps (not CloudFormation + CodeBuild)
 - Database: PostgreSQL with sqlc for Go APIs and PostgREST for dashboards (not DynamoDB)
 - API: Gin framework (not API Gateway + Lambda)
 
@@ -359,13 +359,18 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 
 ### 5. Provisioning Abstraction
 
-**Principle:** Abstract tenant resource provisioning to support multiple provisioning engines.
+**Principle:** Abstract tenant resource provisioning using the Crossplane + ArgoCD GitOps pattern.
 
-**Provisioning Strategies:**
+**IMPORTANT:** The Zero-Ops Platform specifically uses the **Crossplane + ArgoCD GitOps implementation** for all provisioning operations. This follows the established pattern: **Hub API → Commits to Git → ArgoCD ApplicationSet → Crossplane XRs → Infrastructure**. Argo Workflows is NOT used in the provisioning engine to maintain simplicity and operational efficiency.
 
-**Strategy 1: Crossplane Compositions**
+**Zero-Ops Platform Implementation:**
+
+The Zero-Ops Platform strictly implements the **Crossplane GitOps Provisioner** following the established pattern:
+**Hub API → Commits to Git → ArgoCD ApplicationSet → Crossplane XRs → Infrastructure**
+
+**Crossplane GitOps Provisioner:**
 ```go
-// GitOpsProvisioner is called by the Hub Tenant Management API (Control Plane).
+// CrossplaneProvisioner is called by the Hub Tenant Management API (Control Plane).
 // It generates the Crossplane manifest and commits it to the central GitOps repo.
 // ArgoCD on the Hub picks it up and provisions the Spoke cluster.
 type CrossplaneProvisioner struct {
@@ -390,67 +395,6 @@ func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req Provisi
     
     // Hub Tenant Management API commits manifest to central GitOps repo
     return p.gitClient.CommitManifest(ctx, req.TenantID, composition)
-}
-```
-
-**Strategy 2: Argo Workflows**
-```go
-// ArgoWorkflowProvisioner is called by the Hub Tenant Management API (Control Plane).
-// It generates the Argo Workflow manifest and commits it to the central GitOps repo.
-type ArgoWorkflowProvisioner struct {
-    gitClient GitClient
-    config    ArgoConfig
-}
-
-func (p *ArgoWorkflowProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error) {
-    // Create Argo Workflow
-    workflow := &unstructured.Unstructured{
-        Object: map[string]interface{}{
-            "apiVersion": "argoproj.io/v1alpha1",
-            "kind":       "Workflow",
-            "metadata": map[string]interface{}{
-                "name": fmt.Sprintf("provision-tenant-%s", req.TenantID),
-            },
-            "spec": map[string]interface{}{
-                "entrypoint": "provision",
-                "arguments": map[string]interface{}{
-                    "parameters": []map[string]interface{}{
-                        {"name": "tenantId", "value": req.TenantID},
-                        {"name": "tier", "value": req.Tier},
-                    },
-                },
-                "templates": []map[string]interface{}{
-                    // Workflow steps
-                },
-            },
-        },
-    }
-    
-    // Strict GitOps: Commit intent to Git repository
-    return p.gitClient.CommitManifest(ctx, req.TenantID, workflow)
-}
-```
-
-
-**Strategy 3: Hybrid (Crossplane + Argo Workflows)**
-```go
-type HybridProvisioner struct {
-    crossplane *CrossplaneProvisioner
-    argo       *ArgoWorkflowProvisioner
-}
-
-func (p *HybridProvisioner) ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error) {
-    // Step 1: Create Crossplane Composition for infrastructure
-    compResult, err := p.crossplane.ProvisionTenant(ctx, req)
-    if err != nil {
-        return nil, err
-    }
-    
-    // Step 2: Create Argo Workflow for orchestration
-    workflowReq := req
-    workflowReq.InfrastructureID = compResult.CompositionID
-    
-    return p.argo.ProvisionTenant(ctx, workflowReq)
 }
 ```
 
@@ -968,7 +912,6 @@ open-sbt/
 │   │   ├── ory/             # Ory Stack auth implementation
 │   │   ├── nats/            # NATS event bus implementation
 │   │   ├── crossplane/      # Crossplane provisioner
-│   │   ├── argoworkflows/   # Argo Workflows provisioner
 │   │   ├── postgres/        # PostgreSQL storage implementation (sqlc)
 │   │   ├── postgrest/       # PostgREST dashboard API implementation
 │   │   ├── hubstore/        # HubStore (Spoke Pool - direct connection)
@@ -1096,7 +1039,6 @@ import (
     opensbt "github.com/zero-ops/open-sbt/pkg"
     "github.com/zero-ops/open-sbt/pkg/providers/nats"
     "github.com/zero-ops/open-sbt/pkg/providers/crossplane"
-    "github.com/zero-ops/open-sbt/pkg/providers/argoworkflows"
 )
 
 func main() {
@@ -1107,9 +1049,9 @@ func main() {
         URL: "nats://nats:4222",
     })
     
-    provisioner := argoworkflows.NewArgoWorkflowProvisioner(argoworkflows.Config{
+    provisioner := crossplane.NewCrossplaneProvisioner(crossplane.Config{
         KubeConfig: "/path/to/kubeconfig",
-        Namespace:  "argo",
+        GitClient:  gitClient,
     })
     
     // Create Application Plane
@@ -1205,7 +1147,6 @@ func main() {
 - [ ] Implement PostgreSQL storage provider (with sqlc)
 - [ ] Implement PostgREST dashboard provider
 - [ ] Implement Crossplane provisioner
-- [ ] Implement Argo Workflows provisioner
 
 ### Phase 3: Control Plane (Week 5-6)
 - [ ] Implement Control Plane core
@@ -1222,7 +1163,6 @@ func main() {
 - [ ] Implement event handlers
 - [ ] Implement provisioning workflows
 - [ ] Integrate with Crossplane
-- [ ] Integrate with Argo Workflows
 - [ ] Integrate with ArgoCD
 
 ### Phase 5: MCP Integration (Week 9)
@@ -1260,7 +1200,7 @@ func main() {
 - **Reason**: Open-source, self-hosted, cloud-agnostic, better customization
 - **Trade-off**: More operational overhead, but gain control and cost savings
 
-### 4. Why Crossplane + Argo Workflows Instead of CloudFormation?
+### 4. Why Crossplane + ArgoCD Instead of CloudFormation?
 - **Reason**: Kubernetes-native, GitOps-first, cloud-agnostic, better for BYOC
 - **Trade-off**: Steeper learning curve, but gain flexibility and portability
 
@@ -1289,7 +1229,7 @@ func main() {
 | **Infrastructure** | AWS CDK | Kubernetes-native |
 | **Event Bus** | AWS EventBridge | NATS |
 | **Authentication** | AWS Cognito | Ory Stack (Kratos/Hydra/Keto) |
-| **Provisioning** | CloudFormation + CodeBuild | Crossplane + Argo Workflows |
+| **Provisioning** | CloudFormation + CodeBuild | Crossplane + ArgoCD GitOps |
 | **Database** | DynamoDB | PostgreSQL + sqlc + PostgREST |
 | **API** | API Gateway + Lambda | Gin (Go HTTP framework) |
 | **Deployment** | CloudFormation | GitOps (ArgoCD) |
@@ -1476,7 +1416,6 @@ The following additional design patterns were discovered from thorough SBT-AWS a
 - [AWS SaaS Builder Toolkit (SBT-AWS)](https://github.com/awslabs/sbt-aws)
 - [AWS Well-Architected SaaS Lens](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html)
 - [Crossplane Documentation](https://docs.crossplane.io/)
-- [Argo Workflows Documentation](https://argoproj.github.io/argo-workflows/)
 - [ArgoCD Documentation](https://argo-cd.readthedocs.io/)
 - [NATS Documentation](https://docs.nats.io/)
 - [Ory Documentation](https://www.ory.sh/docs/)

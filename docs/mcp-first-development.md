@@ -18,50 +18,48 @@ When starting any development task, follow this sequence:
 
 ### 1. Identify the Component/Domain
 Determine which platform component you're working with:
-- **zero-ops-api**: Core platform API and tenant management
-- **agents**: Agent execution and lifecycle
-- **clusters**: Kubernetes cluster management (CAPI/CAPH)
-- **monitoring**: Observability and metrics
-- **auth**: Authentication and authorization (Ory stack)
-- **gitops**: ArgoCD and deployment management
-- **storage**: PostgreSQL, S3, and data operations
+- **tenant-core**: Core platform API and tenant management
+- **agent-core**: Agent execution and lifecycle
+- **cluster-core**: Kubernetes cluster management (CAPI/CAPH)
+- **monitoring-core**: Observability and metrics
+- **auth-core**: Authentication and authorization (Ory stack)
+- **gitops-core**: ArgoCD and deployment management
+- **storage-core**: PostgreSQL, S3, and data operations
 
-
-### 2. Check for Existing MCP Server
-Before writing any code, search for the relevant MCP server:
+### 2. Check for Existing MCP Tools
+Before writing any code, search for existing MCP tools in the domain folders:
 
 **Search Pattern:**
 ```bash
-# Look for MCP server in the codebase
-find . -type d -name "*mcp*" | grep -i <component-name>
+# Look for MCP tools in domain folders
+find internal/ -type d -name "mcp" | grep -i <component-name>
 
-# Common MCP server locations
-# - zero-ops-api/mcp/
-# - agents/mcp/
-# - clusters/mcp/
-# - monitoring/mcp/
+# Domain MCP tool locations
+# - internal/tenant-core/mcp/
+# - internal/agent-core/mcp/
+# - internal/cluster-core/mcp/
+# - internal/monitoring-core/mcp/
 ```
 
 **What to Look For:**
-- MCP server implementation (Go code)
-- Tool definitions and schemas
-- API endpoints exposed via MCP
+- Tool definitions and schemas in domain folders
+- Tool registration in `cmd/mcp-server/main.go`
 - Authentication and authorization patterns
 - Example usage and documentation
 
 ### 3. Discover Available Tools
-If an MCP server exists, discover its available tools:
+Check the single MCP server for available tools:
 
 **Using MCP Protocol:**
 ```json
-// Request: List available tools
+// Request: List available tools from the single MCP server
 {
   "jsonrpc": "2.0",
   "method": "tools/list",
   "id": 1
 }
 
-// Response: Available tools
+// Response: All available tools from all domains
 {
   "jsonrpc": "2.0",
   "result": {
@@ -69,6 +67,11 @@ If an MCP server exists, discover its available tools:
       {
         "name": "create_tenant",
         "description": "Create a new tenant in the platform",
+        "inputSchema": { ... }
+      },
+      {
+        "name": "execute_agent", 
+        "description": "Execute an agent with parameters",
         "inputSchema": { ... }
       }
     ]
@@ -89,14 +92,14 @@ Examine the tool's input schema and capabilities:
 - Is tenant context automatically handled?
 
 ### 5. Use the MCP Tool
-If the tool meets your needs, use it instead of writing new code:
+If the tool meets your needs, use it via the single MCP server instead of writing new code:
 
 **Example: Creating a Tenant**
 ```go
 // Instead of writing direct database code:
 // db.Exec("INSERT INTO tenants ...")
 
-// Use the MCP tool:
+// Use the MCP tool via the single server:
 result, err := mcpClient.CallTool(ctx, "create_tenant", map[string]interface{}{
     "name": "acme-corp",
     "tier": "premium",
@@ -106,16 +109,21 @@ result, err := mcpClient.CallTool(ctx, "create_tenant", map[string]interface{}{
 
 ### 6. Only Write New Code If Needed
 Write new code only if:
-- No MCP server exists for this component
+- No MCP tool exists for this functionality in any domain folder
 - Existing MCP tools don't provide the needed functionality
-- You're implementing a new MCP server or tool
+- You're implementing a new MCP tool in a domain folder
 - You're working on internal implementation (not exposed via MCP)
 
+**When adding new tools:**
+- Add the tool implementation to the appropriate domain folder (e.g., `internal/tenant-core/mcp/`)
+- Register the tool in `cmd/mcp-server/main.go`
+- All tools are exposed through the single MCP server endpoint
 
-## Component-Specific MCP Servers
 
-### Zero-Ops API MCP Server
-**Location**: `zero-ops-api/mcp/`
+## Component-Specific MCP Tools
+
+### Tenant Core MCP Tools
+**Location**: `internal/tenant-core/mcp/`
 
 **Expected Tools:**
 - `create_tenant`: Create new tenant
@@ -140,16 +148,15 @@ func CreateTenant(ctx context.Context, name string) error {
     return err
 }
 
-// ✅ DO: Check zero-ops MCP server first
-// 1. Search for zero-ops-api/mcp/
+// ✅ DO: Check tenant-core MCP tools first
+// 1. Search for internal/tenant-core/mcp/
 // 2. Check if create_tenant tool exists
-// 3. Use the tool if available
-// 4. Only write new code if tool doesn't exist
+// 3. Use the tool via the single MCP server
+// 4. Only add new tool to domain folder if needed
 ```
 
-
-### Agents MCP Server
-**Location**: `agents/mcp/`
+### Agent Core MCP Tools
+**Location**: `internal/agent-core/mcp/`
 
 **Expected Tools:**
 - `create_agent`: Create new agent
@@ -172,16 +179,15 @@ func ExecuteAgent(ctx context.Context, agentID string) error {
     // Complex agent execution logic...
 }
 
-// ✅ DO: Check agents MCP server first
-// 1. Search for agents/mcp/
+// ✅ DO: Check agent-core MCP tools first
+// 1. Search for internal/agent-core/mcp/
 // 2. Check if execute_agent tool exists
 // 3. Review tool schema and capabilities
-// 4. Use the tool if it meets requirements
+// 4. Use the tool via the single MCP server
 ```
 
-
-### Clusters MCP Server
-**Location**: `clusters/mcp/`
+### Cluster Core MCP Tools
+**Location**: `internal/cluster-core/mcp/`
 
 **Expected Tools:**
 - `create_cluster`: Provision new Kubernetes cluster (CAPI/CAPH)
@@ -204,16 +210,15 @@ func CreateCluster(ctx context.Context, spec ClusterSpec) error {
     // Direct CAPI API calls...
 }
 
-// ✅ DO: Check clusters MCP server first
-// 1. Search for clusters/mcp/
+// ✅ DO: Check cluster-core MCP tools first
+// 1. Search for internal/cluster-core/mcp/
 // 2. Check if create_cluster tool exists
 // 3. Verify it supports CAPI/CAPH
-// 4. Use the tool for cluster operations
+// 4. Use the tool via the single MCP server
 ```
 
-
-### Monitoring MCP Server
-**Location**: `monitoring/mcp/`
+### Monitoring Core MCP Tools
+**Location**: `internal/monitoring-core/mcp/`
 
 **Expected Tools:**
 - `query_metrics`: Query VictoriaMetrics
@@ -230,8 +235,8 @@ func CreateCluster(ctx context.Context, spec ClusterSpec) error {
 - Alert configuration
 - Cluster diagnostics
 
-### GitOps MCP Server
-**Location**: `gitops/mcp/`
+### GitOps Core MCP Tools
+**Location**: `internal/gitops-core/mcp/`
 
 **Expected Tools:**
 - `create_application`: Create ArgoCD application
@@ -247,43 +252,42 @@ func CreateCluster(ctx context.Context, spec ClusterSpec) error {
 - Deployment status monitoring
 
 
-## MCP Server Discovery Process
+## MCP Tool Discovery Process
 
 ### Step-by-Step Discovery
 
 **1. Identify Your Task**
 ```
 Task: "Implement tenant creation endpoint"
-Component: zero-ops-api
+Component: tenant-core
 ```
 
-**2. Search for MCP Server**
+**2. Search for MCP Tools**
 ```bash
-# Search in codebase
-find . -path "*/zero-ops*/mcp/*" -type f
+# Search in domain folders
+find internal/ -path "*/tenant-core/mcp/*" -type f
 
 # Expected locations:
-# - zero-ops-api/mcp/server.go
-# - zero-ops-api/mcp/tools/
-# - zero-ops-api/mcp/README.md
+# - internal/tenant-core/mcp/tools.go
+# - internal/tenant-core/mcp/tenant_tools.go
+# - internal/tenant-core/mcp/README.md
 ```
 
-**3. Read MCP Server Documentation**
+**3. Check Single MCP Server Registration**
 ```bash
-# Check for documentation
-cat zero-ops-api/mcp/README.md
+# Check tool registration in single server
+cat cmd/mcp-server/main.go
 
 # Look for:
-# - Available tools
-# - Authentication requirements
-# - Example usage
-# - API endpoints
+# - Tool registration from domain folders
+# - Server initialization
+# - Available endpoints
 ```
 
 **4. Examine Tool Definitions**
 ```go
-// Look for tool definitions in code
-// File: zero-ops-api/mcp/tools/tenant.go
+// Look for tool definitions in domain folder
+// File: internal/tenant-core/mcp/tenant_tools.go
 
 type CreateTenantTool struct {
     Name        string
@@ -296,10 +300,9 @@ func (t *CreateTenantTool) Execute(ctx context.Context, params map[string]interf
 }
 ```
 
-
 **5. Test the Tool**
 ```bash
-# Use MCP client to test
+# Use MCP client to test via single server
 curl -X POST http://localhost:8080/mcp/tools/call \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -314,15 +317,16 @@ curl -X POST http://localhost:8080/mcp/tools/call \
 
 **6. Integrate or Implement**
 ```go
-// If tool exists and works, use it:
+// If tool exists and works, use it via single server:
 result, err := mcpClient.CallTool(ctx, "create_tenant", params)
 
-// If tool doesn't exist, implement it:
-// 1. Create new tool in MCP server
-// 2. Follow MCP protocol standards
-// 3. Include tenant context handling
-// 4. Add authentication/authorization
-// 5. Document the new tool
+// If tool doesn't exist, implement it in domain folder:
+// 1. Create new tool in internal/<domain>/mcp/
+// 2. Register tool in cmd/mcp-server/main.go
+// 3. Follow MCP protocol standards
+// 4. Include tenant context handling
+// 5. Add authentication/authorization
+// 6. Document the new tool
 ```
 
 ## Decision Tree
@@ -330,21 +334,23 @@ result, err := mcpClient.CallTool(ctx, "create_tenant", params)
 ```
 Need to implement functionality?
 │
-├─ Is there an MCP server for this component?
+├─ Are there MCP tools for this functionality?
 │  │
-│  ├─ YES: Does it have the tool I need?
+│  ├─ YES: Does the existing tool meet my needs?
 │  │  │
-│  │  ├─ YES: Use the existing tool ✅
+│  │  ├─ YES: Use the existing tool via single MCP server ✅
 │  │  │
 │  │  └─ NO: Should this be an MCP tool?
 │  │     │
-│  │     ├─ YES: Add tool to existing MCP server
+│  │     ├─ YES: Add tool to appropriate domain folder (internal/<domain>/mcp/)
+│  │     │      Register in cmd/mcp-server/main.go
 │  │     │
 │  │     └─ NO: Implement as internal function
 │  │
-│  └─ NO: Should this component have an MCP server?
+│  └─ NO: Should this functionality be an MCP tool?
 │     │
-│     ├─ YES: Create new MCP server with tools
+│     ├─ YES: Create new tool in domain folder (internal/<domain>/mcp/)
+│     │      Register in cmd/mcp-server/main.go
 │     │
 │     └─ NO: Implement as internal service
 ```
@@ -366,19 +372,24 @@ Create a new MCP tool when the functionality:
 - **Internal implementation detail**: Only used within a single service
 - **Performance-critical path**: MCP overhead is unacceptable
 - **Temporary/experimental**: Not ready for production use
-- **Already exists**: Duplicate functionality in another MCP server
+- **Already exists**: Duplicate functionality in another domain's MCP tools
 
-## MCP Server Implementation Pattern
+## Single MCP Server Implementation Pattern
 
-### Standard MCP Server Structure (Go)
+### MCP Server Structure (Go)
 
 ```go
-// File: zero-ops-api/mcp/server.go
-package mcp
+// File: cmd/mcp-server/main.go
+package main
 
 import (
     "context"
     "github.com/gin-gonic/gin"
+    
+    // Import domain MCP tools
+    tenantTools "internal/tenant-core/mcp"
+    agentTools "internal/agent-core/mcp"
+    clusterTools "internal/cluster-core/mcp"
 )
 
 type Server struct {
@@ -394,9 +405,10 @@ func NewServer(db *sql.DB, keto *keto.Client) *Server {
         keto:  keto,
     }
     
-    // Register tools
-    s.RegisterTool(NewCreateTenantTool(db))
-    s.RegisterTool(NewGetTenantTool(db))
+    // Register tools from all domains
+    s.RegisterTools(tenantTools.GetTools(db))
+    s.RegisterTools(agentTools.GetTools(db))
+    s.RegisterTools(clusterTools.GetTools(db))
     
     return s
 }
@@ -406,8 +418,8 @@ func NewServer(db *sql.DB, keto *keto.Client) *Server {
 ### Standard Tool Implementation
 
 ```go
-// File: zero-ops-api/mcp/tools/tenant.go
-package tools
+// File: internal/tenant-core/mcp/tenant_tools.go
+package mcp
 
 import (
     "context"
@@ -445,6 +457,16 @@ func (t *CreateTenantTool) InputSchema() map[string]interface{} {
             },
         },
         "required": []string{"name", "tier"},
+    }
+}
+
+// GetTools returns all tenant-core MCP tools
+func GetTools(db *sql.DB) []Tool {
+    return []Tool{
+        NewCreateTenantTool(db),
+        NewGetTenantTool(db),
+        NewUpdateTenantTool(db),
+        // ... other tenant tools
     }
 }
 ```
@@ -682,17 +704,18 @@ func TestCreateTenantTool(t *testing.T) {
 
 Before writing code for any component:
 
-- [ ] Identify the component/domain (zero-ops, agents, clusters, etc.)
-- [ ] Search for existing MCP server in that component
-- [ ] Check if MCP server has the tool you need
+- [ ] Identify the component/domain (tenant-core, agent-core, cluster-core, etc.)
+- [ ] Search for existing MCP tools in domain folder (`internal/<domain>/mcp/`)
+- [ ] Check if domain has the tool you need
 - [ ] Review tool schema and capabilities
-- [ ] Test the tool with sample data
+- [ ] Test the tool via single MCP server with sample data
 - [ ] Use the tool if it meets requirements
 - [ ] Only write new code if no suitable tool exists
-- [ ] If creating new tool, follow MCP best practices
+- [ ] If creating new tool, add to appropriate domain folder
+- [ ] Register new tool in `cmd/mcp-server/main.go`
 - [ ] Include tenant context, authorization, logging, metrics
 - [ ] Write E2E tests with Testcontainers-Go
-- [ ] Document the new tool in MCP server README
+- [ ] Document the new tool in domain MCP README
 
 
 ## Common Scenarios
@@ -701,40 +724,40 @@ Before writing code for any component:
 **Task**: Add endpoint to update tenant tier
 
 **MCP-First Approach:**
-1. Search for `zero-ops-api/mcp/`
+1. Search for `internal/tenant-core/mcp/`
 2. Check for `update_tenant` tool
-3. If exists: Use it in your endpoint handler
-4. If not: Add `update_tenant` tool to MCP server
-5. Expose via HTTP endpoint that calls MCP tool
+3. If exists: Use it in your endpoint handler via single MCP server
+4. If not: Add `update_tenant` tool to `internal/tenant-core/mcp/`
+5. Register tool in `cmd/mcp-server/main.go`
+6. Expose via HTTP endpoint that calls MCP tool
 
 ### Scenario 2: Agent Execution
 **Task**: Implement agent execution API
 
 **MCP-First Approach:**
-1. Search for `agents/mcp/`
+1. Search for `internal/agent-core/mcp/`
 2. Check for `execute_agent` tool
 3. Review tool capabilities (sync vs async, parameters, etc.)
-4. Use tool instead of implementing execution logic
+4. Use tool via single MCP server instead of implementing execution logic
 5. Tool handles: AgentSandbox sandboxing, NATS queuing, Kagents workflows
 
 ### Scenario 3: Cluster Provisioning
 **Task**: Add cluster creation endpoint
 
 **MCP-First Approach:**
-1. Search for `clusters/mcp/`
+1. Search for `internal/cluster-core/mcp/`
 2. Check for `create_cluster` tool
 3. Verify it supports CAPI/CAPH and Hetzner
-4. Use tool for cluster provisioning
+4. Use tool via single MCP server for cluster provisioning
 5. Tool handles: Crossplane, CAPI, ArgoCD deployment
-
 
 ### Scenario 4: Metrics and Monitoring
 **Task**: Add endpoint to query tenant metrics
 
 **MCP-First Approach:**
-1. Search for `monitoring/mcp/`
+1. Search for `internal/monitoring-core/mcp/`
 2. Check for `query_metrics` or `get_tenant_metrics` tool
-3. Use tool to query VictoriaMetrics
+3. Use tool via single MCP server to query VictoriaMetrics
 4. Tool handles: PromQL queries, tenant filtering, time ranges
 5. Return formatted results to client
 
@@ -742,9 +765,9 @@ Before writing code for any component:
 **Task**: Trigger deployment for tenant
 
 **MCP-First Approach:**
-1. Search for `gitops/mcp/`
+1. Search for `internal/gitops-core/mcp/`
 2. Check for `sync_application` tool
-3. Use tool to trigger ArgoCD sync
+3. Use tool via single MCP server to trigger ArgoCD sync
 4. Tool handles: ArgoCD API, tenant context, status monitoring
 5. Return deployment status to client
 
@@ -784,12 +807,13 @@ Before writing code for any component:
 ## Summary
 
 **Always follow this sequence:**
-1. **Discover**: Search for existing MCP server and tools
+1. **Discover**: Search for existing MCP tools in domain folders
 2. **Evaluate**: Check if tools meet your requirements
-3. **Use**: Integrate existing tools into your code
-4. **Extend**: Add new tools to MCP server if needed
-5. **Document**: Update MCP server documentation
-6. **Test**: Write E2E tests for new tools
+3. **Use**: Integrate existing tools via the single MCP server
+4. **Extend**: Add new tools to domain folders if needed
+5. **Register**: Register new tools in `cmd/mcp-server/main.go`
+6. **Document**: Update domain MCP documentation
+7. **Test**: Write E2E tests for new tools
 
-**Remember**: MCP First, Code Second. The platform's capabilities should be exposed through MCP tools, making them discoverable, reusable, and consistent across all consumers.
+**Remember**: MCP First, Code Second. The platform's capabilities should be exposed through MCP tools in domain folders, all accessible via the single MCP server, making them discoverable, reusable, and consistent across all consumers.
 

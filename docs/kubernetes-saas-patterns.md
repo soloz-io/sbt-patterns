@@ -71,7 +71,6 @@ func (c *ControlPlane) CreateTenant(ctx context.Context, req opensbt.CreateTenan
 **Kubernetes Automation:**
 - **GitOps Workflow**: Commit tenant config → ArgoCD applies manifests
 - **Crossplane Compositions**: Declarative infrastructure provisioning
-- **Argo Workflows**: Complex multi-step provisioning orchestration
 ### 3. Tenant-Aware Authentication
 
 **User Need:** "I want users to authenticate and be automatically routed to their tenant context"
@@ -191,7 +190,7 @@ logger.Info(ctx, "Order created", map[string]interface{}{
 
 **User Need:** "I want to deploy application updates across all tenants safely with rollback capabilities"
 
-**open-sbt Pattern:** Use **GitOps-First** approach with **ArgoCD + Argo Workflows**
+**open-sbt Pattern:** Use **GitOps-First** approach with **ArgoCD + Crossplane**
 
 **Implementation Approach:**
 ```go
@@ -202,14 +201,16 @@ provisioner.UpdateTenantResources(ctx, opensbt.UpdateRequest{
         {Type: "deployment", Name: "app", Image: "myapp:v2.1.0"},
     },
 })
-// → Commits to Git → ArgoCD applies → Argo Workflows orchestrates rollout
+// → Commits to Git → ArgoCD applies → Crossplane handles infrastructure
 ```
 
 **Kubernetes CI/CD Patterns:**
 - **ArgoCD Applications**: One Application per tenant namespace
-- **Argo Workflows**: Complex deployment orchestration (blue/green, canary)
+- **Crossplane Compositions**: Declarative infrastructure provisioning and updates
 - **Kustomize Overlays**: Tenant-specific configuration management
 - **OCI Artifacts**: Versioned service catalog packages
+
+**Note:** The Zero-Ops Platform specifically uses the **Crossplane + ArgoCD GitOps implementation** for all provisioning operations. This follows the established pattern: Hub API → Git → ArgoCD ApplicationSet → Crossplane XRs → Infrastructure.
 
 ### 8. Tenant Self-Service Portal
 
