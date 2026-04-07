@@ -65,11 +65,23 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
   - Installs Hetzner CSI driver
 - **ArgoCD Integration:** ArgoCD IS part of hub orchestration (installed in PostBoot phase)
 
-### Missing Components (Phase 1 MVP)
-- **VictoriaMetrics:** Metrics storage and querying (not installed)
-- **Grafana:** Dashboards and visualization (not installed)
-- **Fleet Registry:** Git repository structure for tenant descriptors
-- **Tenant Onboarding MCP Server:** API for tenant lifecycle management
+### Bootstrap Handoff Pattern
+
+**Critical Design Principle:** ClusterResourceSet is used ONLY for injecting the ArgoCD Agent. All other platform components are deployed via ArgoCD ApplicationSets.
+
+**Why?**
+- CRS is "fire-and-forget" with no drift reconciliation
+- ArgoCD provides observability, health checks, and easy upgrades
+- Upgrading CNPG across 1,000 clusters via CRS is a nightmare
+- ArgoCD makes it a simple Git commit
+
+**Timeline:**
+1. **Infrastructure:** Crossplane + CAPI provision Hetzner VMs
+2. **Bootstrap:** CRS injects ArgoCD Agent (Secret Zero)
+3. **Platform:** ArgoCD Cluster Generator deploys edge-catalog
+4. **Tenants:** ArgoCD Git Generator deploys tenant workloads
+
+See [Crossplane Compositions](./crossplane-compositions.md) for detailed XRD specifications.
 
 ## Spoke Cluster Architecture
 
@@ -78,12 +90,24 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
 - **ClusterClass-based:** Use templates for consistent topology
 - **HA Control Plane:** 3 master nodes across 3 availability zones
 - **Auto-scaling Workers:** Worker pools with min/max replicas
-- **Network Isolation:** Private network per tenant (dedicated spoke)
+- **Network Isolation:** 
+  - Dedicated Spoke: Private network per tenant
+  - Shared Spoke Pool: Dual-namespace + NetworkPolicy isolation (see [Crossplane Compositions](./crossplane-compositions.md))
 
-### Spoke Components (to be deployed)
-- **ArgoCD Agent:** Lightweight agent connecting to hub ArgoCD
-- **Grafana Alloy:** Metrics collection and forwarding to hub
-- **Tenant Workloads:** Control plane + application plane
+### Spoke Components (Edge Catalog)
+
+**Bootstrap Phase (ClusterResourceSet):**
+- **ArgoCD Agent ONLY:** Injected via CAPI ClusterResourceSet (Secret Zero)
+
+**Platform Phase (ArgoCD ApplicationSet - Cluster Generator):**
+- **CNPG Operator & Shared Cluster:** PostgreSQL for tenant databases
+- **NATS Leaf Node:** Event bus connection to Hub
+- **SPIRE Agent:** Identity federation with Hub
+- **Grafana Alloy:** Metrics forwarding to Hub VictoriaMetrics
+- **Spoke Controller:** Watches Crossplane claims, writes status to Hub DB
+
+**Tenant Phase (ArgoCD ApplicationSet - Git Generator):**
+- **Tenant Workloads:** Control plane + application plane per tenant
 
 ## Fleet Registry Pattern
 
@@ -127,10 +151,42 @@ spec:
 ```
 
 ### ApplicationSet Pattern
-- **Git Generator:** Watches `fleet-registry/tenants/*.yaml`
+- **Fleet Infrastructure ApplicationSet (Cluster Generator):** Deploys edge-catalog (CNPG, NATS, SPIRE, Alloy) to all Spoke Pool clusters
+- **Tenant ApplicationSet (Git Generator):** Watches `fleet-registry/tenants/*.yaml` for tenant descriptors
 - **Auto-Discovery:** New tenant descriptors trigger Application creation
 - **Control Plane ApplicationSet:** Deploys tenant control plane services
 - **App Plane ApplicationSet:** Deploys tenant application workloads
+
+#### Fleet Infrastructure ApplicationSet Example
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: spoke-pool-infrastructure
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          spoke-type: pool  # Targets all Spoke Pool clusters
+  template:
+    metadata:
+      name: '{{name}}-edge-catalog'
+    spec:
+      project: platform
+      source:
+        repoURL: https://github.com/zero-ops/catalog
+        targetRevision: HEAD
+        path: edge-catalog/  # Contains CNPG, NATS, SPIRE, Alloy
+      destination:
+        server: '{{server}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+```
 
 ## GitOps Flow (Declarative)
 

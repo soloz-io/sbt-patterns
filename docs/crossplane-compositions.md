@@ -523,6 +523,65 @@ spec:
 4. **Network Policies:** Same dual-plane isolation policy
 5. **SPIRE Agent:** Injected via CAPI ClusterResourceSet for Hub authentication
 
+## Bootstrap Handoff & Edge Catalog Deployment
+
+### The Agent-Only Bootstrap Pattern
+
+**Critical Design Principle:** ClusterResourceSet is used ONLY for injecting the ArgoCD Agent (Secret Zero). All platform components are deployed via ArgoCD ApplicationSets.
+
+**Timeline:**
+1. **Infrastructure:** Crossplane + CAPI provision Hetzner VMs
+2. **Bootstrap:** CAPI ClusterResourceSet injects ArgoCD Agent manifests and connection token
+3. **Agent Connection:** ArgoCD Agent boots and connects to Hub ArgoCD
+4. **Platform Deployment:** ArgoCD Cluster Generator ApplicationSet deploys edge-catalog
+5. **Tenant Deployment:** ArgoCD Git Generator ApplicationSet deploys tenant workloads
+
+### Fleet Infrastructure ApplicationSet
+
+Once the ArgoCD Agent connects to the Hub, this ApplicationSet automatically deploys the edge-catalog to all Spoke Pool clusters:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: spoke-pool-infrastructure
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          spoke-type: pool  # Targets all Spoke Pool clusters
+  template:
+    metadata:
+      name: '{{name}}-edge-catalog'
+    spec:
+      project: platform
+      source:
+        repoURL: https://github.com/zero-ops/catalog
+        targetRevision: HEAD
+        path: edge-catalog/  # Contains CNPG, NATS, SPIRE, Alloy
+      destination:
+        server: '{{server}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+```
+
+**Edge Catalog Contents:**
+- CNPG Operator & Shared Cluster (PostgreSQL for tenant databases)
+- NATS Leaf Node (event bus connection to Hub)
+- SPIRE Agent (identity federation with Hub)
+- Grafana Alloy (metrics forwarding to Hub VictoriaMetrics)
+- Spoke Controller (watches Crossplane claims, writes status to Hub DB)
+
+**Why This Pattern?**
+- Drift reconciliation via ArgoCD (CRS is fire-and-forget)
+- Visual observability in ArgoCD UI
+- Easy upgrades via Git commit (no CAPI template changes)
+- Self-healing if components are accidentally deleted
+
 ## SpokePool XR for Cell-Based Scaling
 
 ### Purpose
@@ -593,9 +652,10 @@ spec:
 
 The SpokePool Composition provisions:
 1. **CAPI Cluster:** Hetzner cluster with specified node count
-2. **ClusterResourceSet:** Injects ArgoCD Agent, NATS Leaf Node, SPIRE Agent, Grafana Alloy
-3. **Shared CNPG Cluster:** Single CNPG cluster for all tenants in this pool
-4. **Fleet Registry Entry:** Registers the pool with Hub ArgoCD
+2. **ClusterResourceSet:** Injects ONLY the ArgoCD Agent (Secret Zero) to enable GitOps
+3. **Fleet Registry Entry:** Registers the pool with Hub ArgoCD
+
+Once the ArgoCD Agent connects to the Hub, an ArgoCD ApplicationSet (Cluster Generator) deploys the edge-catalog (CNPG, NATS, SPIRE, Alloy) to the Spoke.
 
 ## Capacity Management
 
