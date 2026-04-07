@@ -43,6 +43,15 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
   - `hetzner-prod-ubuntu-v1` (3 CP + auto-scaling workers, production spoke)
   - `hetzner-staging-ubuntu-v1` (3 CP + min 1 worker, staging spoke)
 
+### Crossplane Infrastructure
+- **XRDs (Composite Resource Definitions):**
+  - `AINativeSaaS` - Tenant infrastructure provisioning
+  - `SpokePool` - Spoke Pool cluster provisioning for cell-based scaling
+- **Compositions:**
+  - `Composition A` - Shared Spoke Pool (Starter/Growth tiers, up to 100 tenants per pool)
+  - `Composition B` - Dedicated Spoke (Premium/Enterprise tiers, 1 tenant per cluster)
+- **See:** [Crossplane Compositions](./crossplane-compositions.md) for detailed specifications
+
 ### Hub Bootstrap Implementation
 - **Location:** `zero-ops/internal/hub/`
 - **Orchestrator:** `bootstrap/orchestrator.go`
@@ -211,5 +220,19 @@ spec:
 ### Tenant Isolation
 - **Dedicated Spoke:** 1 tenant = 1 cluster (Enterprise tier)
 - **Shared Spoke:** Multi-tenant control plane, namespace isolation (Starter tier)
-- **Network Policies:** Enforce traffic isolation
+- **Dual-Plane Pattern:** Each tenant gets two namespaces:
+  - `tenant-{id}-cp` (Control Plane) - labeled with `zero-ops.io/tenant-id` and `zero-ops.io/plane: control`
+  - `tenant-{id}-app` (Application Plane) - labeled with `zero-ops.io/tenant-id` and `zero-ops.io/plane: application`
+- **Network Policies:** Enforce traffic isolation between tenants
+  - Application Plane can only receive traffic from its own Control Plane namespace
+  - Application Plane can only send traffic to shared CNPG database and DNS
+  - This renders each tenant invisible to other tenants at the network layer
 - **RBAC:** Tenant-specific access controls
+
+### Cell-Based Scaling
+- **SpokePool XR:** Platform Admins create `SpokePool` XRs to provision new Spoke Pool clusters
+- **Capacity Management:** Each Spoke Pool has a defined capacity (e.g., 100 tenants)
+- **Fleet Registry:** Tracks utilization and available capacity across all Spoke Pools
+- **Automatic Assignment:** Tenant API assigns new tenants to available pools based on capacity and region
+- **Horizontal Scaling:** When a pool reaches capacity, new tenants are assigned to the next available pool
+- **See:** [Crossplane Compositions](./crossplane-compositions.md) for SpokePool XRD specification
