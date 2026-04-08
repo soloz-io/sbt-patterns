@@ -201,7 +201,7 @@ err := eventBus.Subscribe(ctx, "opensbt_tenantCreated", func(ctx context.Context
 | Application deployment | Application (Spoke) | Tenant workload running inside the Spoke |
 | Metrics collection | Application (Spoke) | Alloy scrapes spoke components → remote_write → VictoriaMetrics on Hub |
 | Event handlers (non-infra) | Application (Spoke) | Async side effects like billing, notifications |
-| **Resource provisioning status** | **Application (Spoke) — Spoke Controller** | controller-runtime watches Crossplane `AINativeSaaS` claim conditions → derives status → writes directly to Hub Centralised DB via Hub-side PostgREST (Bearer JWT, RLS enforced). Does NOT use NATS. Does NOT poll. Does NOT write to Control Plane Shared DB. |
+| **Resource monitoring** | **Application (Spoke) — Headlamp** | Headlamp monitors Crossplane XRs, CNPG clusters, and CAPI clusters across all Spoke clusters via multi-cluster kubeconfig pattern. Provides centralized visibility and alerting for unhealthy resources. |
 | **Control plane data (Pool spoke)** | **Application (Spoke) — HubStore** | Spoke Pool Control Plane apps write operational data (sessions, config) directly to Hub's Control Plane Shared DB via synchronous connection |
 | **Control plane data (Silo spoke)** | **Application (Spoke) — LocalStore** | Spoke Silo Control Plane apps write to local Tenant Control Plane DB. NATS Leaf Node carries state upstream to Hub asynchronously. Hub is NOT a runtime dependency. |
 
@@ -288,7 +288,7 @@ func NewSpokeController(db *pgxpool.Pool) *SpokeController
 
 **Do NOT confuse with IStorage:**
 - `IStorage` → Hub-side tenant CRUD (used by zero-ops-api, control plane API)
-- `IControlPlaneStore` → Spoke-side status/config writes (used by Spoke Controller, Application Plane)
+- `IControlPlaneStore` → Spoke-side config writes (used by Application Plane)
 
 ### Pattern 4: Provisioner Provider (IProvisioner)
 **Default**: Crossplane + CAPI (via Git commit → ArgoCD → Crossplane)
@@ -301,7 +301,7 @@ func NewSpokeController(db *pgxpool.Pool) *SpokeController
 **Implementation Notes**:
 - Must be idempotent
 - `ProvisionTenant` commits an `AINativeSaaS` CR to the tenant's Git control plane repo and returns immediately (202 Accepted). It does NOT block on infrastructure readiness.
-- **Status is NOT polled via `GetProvisioningStatus`.** Provisioning status is reported by the Spoke Controller (controller-runtime), which watches Crossplane `AINativeSaaS` claim conditions on the spoke and writes status directly to Hub Centralised DB via Hub-side PostgREST. Callers read status from the DB, not from the provisioner.
+- **Status is monitored by Headlamp** across all Spoke clusters via multi-cluster kubeconfig pattern. Callers query Headlamp API or Kubernetes resources directly for status.
 - `DeprovisionTenant` commits a deletion to Git. Crossplane handles the teardown sequence.
 
 ### Pattern 5: Secret Manager Provider (ISecretManager)

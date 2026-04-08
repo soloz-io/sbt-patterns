@@ -115,7 +115,7 @@ See [Crossplane Compositions](./crossplane-compositions.md) for detailed XRD spe
 - **Wave 4:** NATS Leaf Node (event bus connection to Hub)
 - **Wave 4:** SPIRE Agent (identity federation with Hub)
 - **Wave 4:** Grafana Alloy (metrics forwarding to Hub VictoriaMetrics)
-- **Wave 4:** Spoke Controller (watches Crossplane claims, writes status to Hub DB)
+- **Wave 4:** Kubeconfig Sidecar (generates kubeconfigs for Headlamp multi-cluster monitoring)
 
 **Tenant Phase (ArgoCD ApplicationSet - Git Generator):**
 - **Tenant Workloads:** Control plane + application plane per tenant

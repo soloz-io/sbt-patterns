@@ -574,7 +574,7 @@ spec:
 - NATS Leaf Node (event bus connection to Hub)
 - SPIRE Agent (identity federation with Hub)
 - Grafana Alloy (metrics forwarding to Hub VictoriaMetrics)
-- Spoke Controller (watches Crossplane claims, writes status to Hub DB)
+- Kubeconfig Sidecar (generates kubeconfigs for Headlamp multi-cluster monitoring)
 
 **Why This Pattern?**
 - Drift reconciliation via ArgoCD (CRS is fire-and-forget)
@@ -695,9 +695,9 @@ When a new tenant is created:
 
 ## Status Reporting
 
-### Spoke Controller Pattern
+### Headlamp Multi-Cluster Monitoring Pattern
 
-A controller-runtime controller runs in each Spoke cluster and:
+Headlamp provides centralized monitoring across all Spoke clusters via:
 1. Watches Crossplane `AINativeSaaS` claim conditions
 2. Derives tenant provisioning status (Creating, Ready, Failed)
 3. Writes status directly to Hub Centralised DB via PostgREST (Bearer JWT, RLS enforced)
@@ -732,7 +732,7 @@ sequenceDiagram
 - [ ] Define `SpokePool` XRD in Hub cluster
 - [ ] Implement SpokePool Composition
 - [ ] Update Universal Helm Chart to generate `AINativeSaaS` XR only
-- [ ] Implement Spoke Controller for status reporting
+- [ ] Deploy Headlamp with Kubeconfig Sidecar for multi-cluster monitoring
 - [ ] Implement Fleet Registry for capacity management
 - [ ] Test dual-plane network isolation with 100 tenants
 - [ ] Test cell-based scaling with multiple Spoke Pools

@@ -84,7 +84,7 @@ Tenant provisioning must be fully automated through a single, repeatable process
    (returns 202 Accepted immediately — never blocks on provisioning)
 3. ArgoCD detects Git commit → syncs manifests to target cluster
 4. Crossplane reconciles AINativeSaaS CR → provisions resources (namespace, CNPG, S3 bucket, etc.)
-5. Spoke Controller watches Crossplane claim conditions → writes status to Hub Centralised DB
+5. Headlamp monitors Crossplane XR conditions and resource health across all Spoke clusters
 6. Ory Keto creates tenant authorization relationships
 7. Hub Event Router consumes NATS lifecycle event → triggers non-infra side effects (billing, monitoring setup)
 8. Tenant status readable from Hub Centralised DB — frontend polls or receives SSE

@@ -115,9 +115,8 @@ type IEventBus interface {
 // IProvisioner - Tenant resource provisioning
 // ProvisionTenant commits an AINativeSaaS CR to the tenant's Git control plane repo
 // and returns immediately. It does NOT block on infrastructure readiness.
-// Status is reported asynchronously by the Spoke Controller (controller-runtime),
-// which watches Crossplane claim conditions and writes to Hub Centralised DB via PostgREST.
-// Callers MUST read status from the DB — never poll the provisioner.
+// Status is monitored by Headlamp across all Spoke clusters via multi-cluster kubeconfig pattern.
+// Callers query Headlamp API or Kubernetes resources directly for status.
 type IProvisioner interface {
     // Provision tenant resources — commits to Git, returns 202-equivalent immediately
     ProvisionTenant(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error)
@@ -129,7 +128,7 @@ type IProvisioner interface {
     UpdateTenantResources(ctx context.Context, req UpdateRequest) (*UpdateResult, error)
     
     // NOTE: GetProvisioningStatus is intentionally absent.
-    // Status is written by the Spoke Controller to Hub Centralised DB and read from there.
+    // Status is monitored by Headlamp and read from Kubernetes resources directly.
 }
 ```
 
@@ -285,9 +284,8 @@ type Event struct {
 4. ArgoCD (Hub): Detects Git commit and syncs manifests
 5. Crossplane: Reconciles infrastructure (CAPI, CNPG, etc.) — provisions Spoke cluster
 6. Spoke: Control Plane + Application Plane come up inside the Spoke
-7. Spoke Controller detects Crossplane claim Ready=True → writes status "ready" to Hub Centralised DB
-   via Hub-side PostgREST (Bearer JWT, RLS enforced)
-8. Spoke Controller publishes spoke.{tenant}.lifecycle.created to NATS Leaf Node
+7. Headlamp detects Crossplane XR Ready=True → monitors resource health across all Spokes
+8. Kubeconfig Sidecar publishes spoke.{tenant}.lifecycle.created to NATS Leaf Node
 9. Hub Event Router consumes event → triggers non-infra side effects (billing, notifications)
 ```
 
@@ -319,7 +317,7 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 2. Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo
 3. ArgoCD syncs Helm chart with Crossplane XRs — provisions a dedicated Spoke cluster
 4. Each Spoke gets its own Control Plane + Application Plane deployed inside it
-5. Spoke Controller watches Crossplane claim conditions and writes status updates to Hub Centralised DB via Hub-side PostgREST (Bearer JWT, RLS enforced)
+5. Headlamp monitors Crossplane XR conditions and resource health across all Spoke clusters
 
 **Standard Tenant Registration Workflow:**
 ```
@@ -330,9 +328,9 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
 2. ArgoCD (Hub) & Crossplane
    → Syncs and provisions Spoke infrastructure automatically
 
-3. Spoke Controller (controller-runtime)
-   → Watches Crossplane claim conditions (Ready=True)
-   → Writes status updates to Hub Centralised DB via Hub-side PostgREST
+3. Headlamp (multi-cluster monitoring)
+   → Monitors Crossplane XR conditions (Ready=True)
+   → Provides centralized visibility across all Spoke clusters
    → Uses Bearer JWT with RLS enforcement for secure writes
 ```
 
@@ -346,8 +344,8 @@ The zero-ops platform implements a dual-path onboarding strategy to optimize for
    → Detects Git change and reconciles deletion
    → Deprovisions resources (returns to warm pool OR destroys dedicated resources)
    
-3. Spoke Controller
-   → Watches Crossplane claim deletion and writes final status to Hub Centralised DB via PostgREST
+3. Headlamp
+   → Monitors Crossplane XR deletion and resource cleanup across all Spoke clusters
    → Publishes opensbt_deprovisionSuccess event to NATS for non-infra side effects
    
 4. Control Plane receives success event
@@ -812,14 +810,13 @@ log.WithFields(log.Fields{
 - **Pattern**: Write SQL queries, generate Go code, use in applications
 
 **PostgREST Usage (Dashboards & Reporting):**
-- **Purpose**: Auto-generated REST API for frontend applications and Spoke Controller writes
+- **Purpose**: Auto-generated REST API for frontend applications
 - **Benefits**: No backend code needed, automatic API generation, RLS support
 - **Use Cases**: 
   - Admin dashboards and tenant portals (read operations)
   - Reporting interfaces (read operations)
-  - Spoke Controller status writes to Hub Centralised DB (write operations via Hub-side PostgREST)
 - **Pattern**: Define database schema, PostgREST exposes REST endpoints
-- **Deployment**: Two instances - Hub-side (accepts writes from Spoke Controllers) and Spoke-side (operational data, read-only)
+- **Deployment**: Spoke-side (operational data, read-only)
 
 **Example Implementation:**
 ```go
@@ -930,9 +927,9 @@ open-sbt/
 │   │   ├── provisioner.go
 │   │   └── workflows.go
 │   │
-│   ├── spokecontroller/      # Spoke Controller (status sync)
-│   │   ├── controller.go    # Watches Crossplane claims
-│   │   ├── postgrest.go     # Writes to Hub via PostgREST
+│   ├── kubeconfig-sidecar/   # Kubeconfig Sidecar (Headlamp integration)
+│   │   ├── controller.go     # Watches Crossplane XRs
+│   │   ├── generator.go      # Generates kubeconfigs for Headlamp
 │   │   └── reconciler.go    # Reconciliation logic
 │   │
 │   ├── events/               # Event definitions and handlers

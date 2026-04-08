@@ -169,19 +169,16 @@ Standard GitOps provisioning takes 45-80 seconds. `open-sbt` splits the onboardi
 
 To scale from 100 tenants to 10,000, the platform implements a cell-based architecture. See [Crossplane Compositions](./crossplane-compositions.md) for detailed `SpokePool` XRD specification and capacity management patterns.
 
-### Status Controller Pattern
+### Status Monitoring Pattern
 
-The Zero-Ops Platform implements a strict **Status Controller Pattern** for all infrastructure status tracking:
+The Zero-Ops Platform implements **Headlamp Multi-Cluster Monitoring** for all infrastructure status tracking:
 
-1. **Source of Truth**: Hub Database (PostgreSQL) contains all tenant and infrastructure status
-2. **Status Updates**: Spoke Controllers watch Crossplane claim conditions and write status to Hub DB via PostgREST
-3. **Status Reads**: Frontend/MCP tools read status directly from Hub Database
-4. **Real-time Updates**: Three options for real-time frontend updates:
-   - **Database Polling**: Frontend polls Hub Database at regular intervals
-   - **PostgREST Listening**: Use PostgREST's native listening capabilities for real-time updates
-   - **Hub Event Router**: Broadcasts DB `pg_notify` updates over NATS WebSockets
+1. **Source of Truth**: Kubernetes resource status in Spoke clusters (Crossplane XRs, CNPG clusters, CAPI clusters)
+2. **Status Monitoring**: Headlamp monitors resource health across all Spoke clusters via multi-cluster kubeconfig pattern
+3. **Status Reads**: Frontend/MCP tools query Headlamp API or read Kubernetes resources directly
+4. **Real-time Updates**: Headlamp WebSocket connections provide live resource status updates to frontend
 
-**Critical Rule**: The database is always the source of truth. Direct NATS messages from Spoke to frontend bypass this pattern and should be avoided.
+**Critical Rule**: Kubernetes resources are the source of truth. Headlamp provides centralized visibility across all clusters.
 
 #### Path A: Shared Pool Tiers (Basic / Standard) - Latency < 2 Seconds
 1. The `open-sbt` App Plane maintains a baseline of 10 "warm" (pre-provisioned) namespaces and Postgres schemas in the cluster.
@@ -197,8 +194,8 @@ The Zero-Ops Platform implements a strict **Status Controller Pattern** for all 
 3. **AI UX Masking:** The frontend AI agent engages the user in a configuration conversation while the provisioning happens.
 4. **GitOps Execution:** The Hub Tenant Management API generates the Helm values manifest and commits a new `tenants/<tenant-id>` folder to the central GitOps repo with `tier: enterprise`.
 5. **Crossplane Provisioning:** ArgoCD syncs the Helm chart, which creates a Crossplane `TenantCluster` XR. Crossplane provisions the Hetzner nodes.
-6. **Status Updates:** Spoke Controller watches Crossplane claim conditions and writes status updates to Hub Database via PostgREST (Bearer JWT, RLS enforced).
-7. **Real-time Frontend Updates:** Frontend polls Hub Database for status updates OR uses PostgREST's native listening capabilities OR Hub Event Router broadcasts DB `pg_notify` updates over NATS WebSockets.
+6. **Status Monitoring:** Headlamp monitors Crossplane claim conditions and resource health across all Spoke clusters via multi-cluster kubeconfig pattern.
+7. **Real-time Frontend Updates:** Frontend queries Headlamp API for resource status OR uses Headlamp WebSocket connections for live updates.
 
 **Important:** The **Hub Database remains the source of truth** for all status information. Real-time updates to the frontend must go through the database layer, not direct NATS messages from the Spoke.
 

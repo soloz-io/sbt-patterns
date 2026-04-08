@@ -34,12 +34,12 @@ The `ALLOY_REMOTE_WRITE_TOKEN` is a static bearer token created during spoke boo
 
 ---
 
-## Item 4: Spoke Controller credentials (bootstrap sequence)
+## Item 4: Kubeconfig Sidecar credentials (bootstrap sequence)
 
 **Key factors to consider:**
 - Credential must be per-spoke — not a shared platform credential
-- Must exist before the Spoke Controller starts
-- Must be rotatable without redeploying the controller
+- Must exist before the Kubeconfig Sidecar starts
+- Must be rotatable without redeploying the sidecar
 - Should use your existing identity infrastructure (Hydra/Kratos)
 
 **Recommendation: Hydra client credentials grant per spoke, provisioned by Crossplane**
@@ -59,9 +59,9 @@ Crossplane writes client_id + client_secret as Kubernetes Secret on spoke
     name: hub-api-credentials
     namespace: spoke-system
     ↓
-Spoke Controller mounts secret, requests token from Hydra on startup
+Kubeconfig Sidecar mounts secret, requests token from Hydra on startup
     ↓
-Uses token for PostgREST writes (Item 1 above)
+Uses token for kubeconfig generation (Item 1 above)
 ```
 
 Token rotation is automatic — client credentials tokens are short-lived (1h). The controller requests a new token before expiry. No manual rotation needed.
@@ -74,13 +74,13 @@ SPOKE BOOTSTRAP SEQUENCE
 1. Crossplane provisions spoke cluster
 2. Crossplane creates Hydra client → stores credentials as K8s Secret on spoke
 3. CRS installs ArgoCD on spoke
-4. ArgoCD deploys: sbt-auth, Spoke Controller, Alloy, NATS Leaf Node
+4. ArgoCD deploys: sbt-auth, Kubeconfig Sidecar, Alloy, NATS Leaf Node
 
 SPOKE RUNTIME
-sbt-auth          → validates JWTs via in-memory JWKS cache (no Hub call per request)
-Spoke Controller  → watches Crossplane → PostgREST → Hub Centralised DB
-                    (auth: Hydra client_credentials token, auto-refreshed)
-Alloy             → scrapes KSM → remote_write → VictoriaMetrics
+sbt-auth             → validates JWTs via in-memory JWKS cache (no Hub call per request)
+Kubeconfig Sidecar   → watches Crossplane XRs → generates kubeconfigs for Headlamp
+                       (auth: Hydra client_credentials token, auto-refreshed)
+Alloy                → scrapes KSM → remote_write → VictoriaMetrics
                     (auth: per-spoke bearer token, provisioned at bootstrap)
 NATS Leaf Node    → billing/lifecycle/notification events → Hub Event Router
                     (auth: NATS credentials, provisioned at bootstrap)

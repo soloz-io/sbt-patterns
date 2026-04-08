@@ -146,7 +146,7 @@ func (p *CrossplaneProvisioner) ProvisionTenant(ctx context.Context, req Provisi
     cr := buildAINativeSaasCR(req.TenantID, req.Tier, req.Region, req.Cloud)
     return p.gitClient.CommitManifest(ctx, req.TenantID, cr)
     // Crossplane reconciles the correct Composition based on spec.tier.
-    // Status is reported asynchronously by the Spoke Controller via Hub-side PostgREST.
+    // Status is monitored by Headlamp across all Spoke clusters via multi-cluster kubeconfig pattern.
 }
 ```
 
