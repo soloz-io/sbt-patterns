@@ -127,51 +127,65 @@ See [Crossplane Compositions](./crossplane-compositions.md) for detailed XRD spe
 zero-ops/
 ├── fleet-registry/
 │   ├── tenants/
-│   │   ├── tenant-acme.yaml
-│   │   ├── tenant-globex.yaml
+│   │   ├── tenant-acme/
+│   │   │   └── values.yaml
+│   │   ├── tenant-globex/
+│   │   │   └── values.yaml
 │   │   └── ...
 │   ├── applicationsets/
 │   │   ├── control-plane-appset.yaml
 │   │   └── app-plane-appset.yaml
 │   └── README.md
+├── charts/
+│   └── universal-tenant/
+│       ├── Chart.yaml
+│       ├── values.yaml (defaults)
+│       └── templates/
+│           ├── ainativesaas-xr.yaml
+│           ├── atlasmigration-cr.yaml
+│           ├── namespace.yaml
+│           └── rbac.yaml
 ```
 
-### Tenant Descriptor Schema
+### Tenant Values Schema (Universal Tenant Helm Chart Pattern)
 ```yaml
-apiVersion: fleet.zero-ops.io/v1alpha1
-kind: TenantDescriptor  # Also known as AINativeSaaS CR
-metadata:
-  name: tenant-acme
-spec:
-  tenantId: acme
-  orgName: Acme Corporation
-  plan: dedicated  # free, shared, dedicated
-  features:
-    - ai-runtime
-    - vector-search
-  database:
-    # Deterministic schema naming for safe migration replay
-    schemaName: tenant_acme  # Format: tenant_<id>
-    migrations:
-      gitRepo: https://github.com/zero-ops/migrations
-      path: tenant-baseline
-      targetRevision: main
-  controlPlaneRepo:
-    url: https://github.com/acme/control-plane
-    path: manifests
+# fleet-registry/tenants/tenant-acme/values.yaml
+# Tenant intent (input), not implementation (CRs)
+tenantId: acme
+orgName: Acme Corporation
+plan: dedicated  # free, shared, dedicated
+features:
+  - ai-runtime
+  - vector-search
+database:
+  # Deterministic schema naming for safe migration replay
+  schemaName: tenant_acme  # Format: tenant_<id>
+  migrations:
+    gitRepo: https://github.com/zero-ops/migrations
+    path: tenant-baseline
     targetRevision: main
-  appPlaneRepo:
-    url: https://github.com/acme/app-plane
-    path: manifests
-    targetRevision: main
-  clusterRef: spoke-acme
-  environment: production  # production, staging
+controlPlaneRepo:
+  url: https://github.com/acme/control-plane
+  path: manifests
+  targetRevision: main
+appPlaneRepo:
+  url: https://github.com/acme/app-plane
+  path: manifests
+  targetRevision: main
+clusterRef: spoke-acme
+environment: production  # production, staging
 ```
+
+**Pattern**: MCP → values.yaml → Git → Helm → CRs → ArgoCD → deploy
+- **Chart**: Platform policy (templates define structure, sync waves, security)
+- **Values**: Tenant input (schema name, capacity, features)
+- **Helm generates**: `AINativeSaaS` XR, `AtlasMigration` CR, namespace, RBAC from templates
 
 ### ApplicationSet Pattern
 - **Fleet Infrastructure ApplicationSet (Cluster Generator):** Deploys edge-catalog (CNPG, NATS, SPIRE, Alloy, Atlas Operator) to all Spoke Pool clusters with sync waves
-- **Tenant ApplicationSet (Git Generator):** Watches `fleet-registry/tenants/*.yaml` for tenant descriptors
-- **Auto-Discovery:** New tenant descriptors trigger Application creation
+- **Tenant ApplicationSet (Git Generator):** Watches `fleet-registry/tenants/*/values.yaml` for tenant values files
+- **Auto-Discovery:** New tenant directories trigger Helm Application creation
+- **Helm Rendering:** Universal Tenant Chart generates CRs from values.yaml (platform policy in templates, tenant input in values)
 - **Sync Waves:** Enforce dependency ordering (Wave 0: Extensions → Wave 1: CNPG → Wave 2: Atlas → Wave 3: PostgREST → Wave 4: Workloads)
 - **Health Checks:** Gate progression between waves (CNPG Ready before Atlas, Atlas Ready before PostgREST)
 - **Control Plane ApplicationSet:** Deploys tenant control plane services
@@ -213,20 +227,21 @@ spec:
 ### Imperative Layer (Thin)
 1. Create tenant record in PostgreSQL
 2. Create/register tenant Git repositories
-3. Commit `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
+3. Commit tenant values to `fleet-registry/tenants/tenant-<id>/values.yaml`
 
 ### Declarative Layer (Controllers)
-1. ApplicationSet detects new tenant descriptor in Git
-2. Generates ArgoCD Application resources with sync waves
-3. CAPI provisions spoke cluster (if dedicated)
-4. ArgoCD agent deployed to spoke cluster
-5. Agent syncs edge catalog with dependency ordering:
+1. ApplicationSet detects new tenant directory in Git
+2. Generates Helm-based ArgoCD Application with Universal Tenant Chart
+3. Helm renders templates with tenant values → generates CRs (`AINativeSaaS` XR, `AtlasMigration` CR, namespace, RBAC)
+4. CAPI provisions spoke cluster (if dedicated)
+5. ArgoCD agent deployed to spoke cluster
+6. Agent syncs edge catalog with dependency ordering:
    - Wave 1: CNPG cluster reaches Ready
    - Wave 2: Atlas Operator deploys, creates `tenant_<id>` schema, applies migrations
    - Wave 3: PostgREST deploys with schema routing to `tenant_<id>`
    - Wave 4: Tenant workloads deploy
-6. Atlas Operator continuously reconciles Git migrations vs schema state (30-60s loop)
-7. Tenant transitions to READY state
+7. Atlas Operator continuously reconciles Git migrations vs schema state (30-60s loop)
+8. Tenant transitions to READY state
 
 ## Observability Architecture
 
@@ -256,20 +271,24 @@ spec:
 **Flow:**
 1. MCP server receives `tenant_create` call
 2. MCP server validates tenant metadata and creates tenant record in PostgreSQL
-3. MCP server commits `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
-4. ArgoCD ApplicationSet (Git Generator) detects new tenant file
-5. ApplicationSet creates tenant-specific Application with sync waves
-6. Application deploys infrastructure to Spoke Pool cluster:
+3. MCP server commits tenant values to `fleet-registry/tenants/tenant-<id>/values.yaml`
+4. ArgoCD ApplicationSet (Git Generator) detects new tenant directory
+5. ApplicationSet creates Helm-based Application using Universal Tenant Chart
+6. Helm renders templates with tenant values → generates CRs
+7. Application deploys generated CRs to Spoke Pool cluster:
    - Wave 0: Database extensions (if needed)
    - Wave 1: CNPG Cluster + PgBouncer
    - Wave 2: Atlas Operator + `AtlasMigration` CR for `tenant_<id>` schema
    - Wave 3: PostgREST (after schema exists)
    - Wave 4: Tenant workloads
-7. Atlas Operator creates deterministic schema: `tenant_<id>` (e.g., `tenant_acme`)
-8. Atlas Operator applies baseline migrations from Git
-9. PostgREST routes requests to `tenant_<id>` schema based on JWT `tenant_id` claim
+8. Atlas Operator creates deterministic schema: `tenant_<id>` (e.g., `tenant_acme`)
+9. Atlas Operator applies baseline migrations from Git
+10. PostgREST routes requests to `tenant_<id>` schema based on JWT `tenant_id` claim
 
 **Key Principles:**
+- **Tenant Intent (values.yaml)**: MCP commits tenant input, not implementation CRs
+- **Platform Policy (Helm templates)**: Chart enforces sync waves, security, resource limits
+- **Helm Generates CRs**: Templates + values → `AINativeSaaS` XR, `AtlasMigration` CR, namespace, RBAC
 - **Deterministic Schema Naming**: `tenant_<id>` enables safe migration replay
 - **GitOps-First**: All state changes via Git commits, ArgoCD reconciles
 - **Sync Waves**: Health checks gate progression (CNPG Ready before Atlas, Atlas Ready before PostgREST)
@@ -281,8 +300,8 @@ spec:
 2. MCP server validates tenant metadata
 3. MCP server creates tenant record in PostgreSQL
 4. Platform admin manually creates GitHub repos (control + app plane)
-5. MCP server commits `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
-6. ApplicationSets auto-discover and provision via sync waves
+5. MCP server commits tenant values to `fleet-registry/tenants/tenant-<id>/values.yaml`
+6. ApplicationSets auto-discover and provision via Helm + sync waves
 
 ### Phase 2 (Automated Repo Creation)
 1. MCP server creates GitHub repos from templates
