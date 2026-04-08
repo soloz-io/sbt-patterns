@@ -34,8 +34,8 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
   - argocd-notifications-controller
 - **CloudNativePG** (namespace: `cnpg-system`):
   - cnpg-cloudnative-pg operator
-- **capi2argo** (namespace: `capi2argo-system`):
-  - capi2argo-controller-manager (CAPI to ArgoCD integration)
+- **Kyverno** (namespace: `kyverno`):
+  - kyverno-controller (policy engine for CAPI to ArgoCD cluster registration)
 
 ### ClusterClass Templates
 - **Existing:** `hetzner-mgmt-ubuntu-v1` (in zero-ops-system namespace)
@@ -60,7 +60,7 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
   - Idempotent operations throughout
 - **Component Installer:** `components/installer.go`
   - Installs ArgoCD via Helm (version 5.51.6)
-  - Installs capi2argo for CAPI→ArgoCD integration
+  - Installs Kyverno for CAPI→ArgoCD cluster registration
   - Installs CloudNativePG operator
   - Installs Hetzner CSI driver
 - **ArgoCD Integration:** ArgoCD IS part of hub orchestration (installed in PostBoot phase)
@@ -75,11 +75,19 @@ update_criteria: Hub-spoke architecture changes, fleet management patterns, spok
 - Upgrading CNPG across 1,000 clusters via CRS is a nightmare
 - ArgoCD makes it a simple Git commit
 
+**Cluster Registration Flow (Kyverno):**
+1. CAPI provisions cluster and creates kubeconfig Secret
+2. Kyverno ClusterPolicy watches `Cluster.status.phase=Provisioned`
+3. Kyverno extracts kubeconfig from CAPI Secret
+4. Kyverno generates ArgoCD cluster Secret with labels: `spoke-type: pool`, `cell-id: <cluster-name>`
+5. ArgoCD discovers cluster within 30 seconds
+
 **Timeline:**
 1. **Infrastructure:** Crossplane + CAPI provision Hetzner VMs
 2. **Bootstrap:** CRS injects ArgoCD Agent (Secret Zero)
-3. **Platform:** ArgoCD Cluster Generator deploys edge-catalog
-4. **Tenants:** ArgoCD Git Generator deploys tenant workloads
+3. **Registration:** Kyverno auto-generates ArgoCD cluster Secret
+4. **Platform:** ArgoCD Cluster Generator deploys edge-catalog
+5. **Tenants:** ArgoCD Git Generator deploys tenant workloads
 
 See [Crossplane Compositions](./crossplane-compositions.md) for detailed XRD specifications.
 
@@ -99,12 +107,15 @@ See [Crossplane Compositions](./crossplane-compositions.md) for detailed XRD spe
 **Bootstrap Phase (ClusterResourceSet):**
 - **ArgoCD Agent ONLY:** Injected via CAPI ClusterResourceSet (Secret Zero)
 
-**Platform Phase (ArgoCD ApplicationSet - Cluster Generator):**
-- **CNPG Operator & Shared Cluster:** PostgreSQL for tenant databases
-- **NATS Leaf Node:** Event bus connection to Hub
-- **SPIRE Agent:** Identity federation with Hub
-- **Grafana Alloy:** Metrics forwarding to Hub VictoriaMetrics
-- **Spoke Controller:** Watches Crossplane claims, writes status to Hub DB
+**Platform Phase (ArgoCD ApplicationSet - Cluster Generator with Sync Waves):**
+- **Wave 0:** Database extensions (if needed)
+- **Wave 1:** CNPG Operator & Shared Cluster + PgBouncer (PostgreSQL for tenant schemas)
+- **Wave 2:** Atlas Operator (GitOps-driven schema migrations and drift detection)
+- **Wave 3:** PostgREST (auto-generated REST API with JWT validation and schema routing)
+- **Wave 4:** NATS Leaf Node (event bus connection to Hub)
+- **Wave 4:** SPIRE Agent (identity federation with Hub)
+- **Wave 4:** Grafana Alloy (metrics forwarding to Hub VictoriaMetrics)
+- **Wave 4:** Spoke Controller (watches Crossplane claims, writes status to Hub DB)
 
 **Tenant Phase (ArgoCD ApplicationSet - Git Generator):**
 - **Tenant Workloads:** Control plane + application plane per tenant
@@ -128,7 +139,7 @@ zero-ops/
 ### Tenant Descriptor Schema
 ```yaml
 apiVersion: fleet.zero-ops.io/v1alpha1
-kind: TenantDescriptor
+kind: TenantDescriptor  # Also known as AINativeSaaS CR
 metadata:
   name: tenant-acme
 spec:
@@ -138,6 +149,13 @@ spec:
   features:
     - ai-runtime
     - vector-search
+  database:
+    # Deterministic schema naming for safe migration replay
+    schemaName: tenant_acme  # Format: tenant_<id>
+    migrations:
+      gitRepo: https://github.com/zero-ops/migrations
+      path: tenant-baseline
+      targetRevision: main
   controlPlaneRepo:
     url: https://github.com/acme/control-plane
     path: manifests
@@ -151,9 +169,11 @@ spec:
 ```
 
 ### ApplicationSet Pattern
-- **Fleet Infrastructure ApplicationSet (Cluster Generator):** Deploys edge-catalog (CNPG, NATS, SPIRE, Alloy) to all Spoke Pool clusters
+- **Fleet Infrastructure ApplicationSet (Cluster Generator):** Deploys edge-catalog (CNPG, NATS, SPIRE, Alloy, Atlas Operator) to all Spoke Pool clusters with sync waves
 - **Tenant ApplicationSet (Git Generator):** Watches `fleet-registry/tenants/*.yaml` for tenant descriptors
 - **Auto-Discovery:** New tenant descriptors trigger Application creation
+- **Sync Waves:** Enforce dependency ordering (Wave 0: Extensions → Wave 1: CNPG → Wave 2: Atlas → Wave 3: PostgREST → Wave 4: Workloads)
+- **Health Checks:** Gate progression between waves (CNPG Ready before Atlas, Atlas Ready before PostgREST)
 - **Control Plane ApplicationSet:** Deploys tenant control plane services
 - **App Plane ApplicationSet:** Deploys tenant application workloads
 
@@ -193,15 +213,20 @@ spec:
 ### Imperative Layer (Thin)
 1. Create tenant record in PostgreSQL
 2. Create/register tenant Git repositories
-3. Commit tenant descriptor to `fleet-registry/tenants/`
+3. Commit `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
 
 ### Declarative Layer (Controllers)
-1. ApplicationSet detects new tenant descriptor
-2. Generates ArgoCD Application resources
+1. ApplicationSet detects new tenant descriptor in Git
+2. Generates ArgoCD Application resources with sync waves
 3. CAPI provisions spoke cluster (if dedicated)
 4. ArgoCD agent deployed to spoke cluster
-5. Agent syncs control plane + app plane manifests
-6. Tenant transitions to READY state
+5. Agent syncs edge catalog with dependency ordering:
+   - Wave 1: CNPG cluster reaches Ready
+   - Wave 2: Atlas Operator deploys, creates `tenant_<id>` schema, applies migrations
+   - Wave 3: PostgREST deploys with schema routing to `tenant_<id>`
+   - Wave 4: Tenant workloads deploy
+6. Atlas Operator continuously reconciles Git migrations vs schema state (30-60s loop)
+7. Tenant transitions to READY state
 
 ## Observability Architecture
 
@@ -226,13 +251,38 @@ spec:
 
 ## Tenant Onboarding Flow
 
+### GitOps-Driven Provisioning (Enterprise-Grade)
+
+**Flow:**
+1. MCP server receives `tenant_create` call
+2. MCP server validates tenant metadata and creates tenant record in PostgreSQL
+3. MCP server commits `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
+4. ArgoCD ApplicationSet (Git Generator) detects new tenant file
+5. ApplicationSet creates tenant-specific Application with sync waves
+6. Application deploys infrastructure to Spoke Pool cluster:
+   - Wave 0: Database extensions (if needed)
+   - Wave 1: CNPG Cluster + PgBouncer
+   - Wave 2: Atlas Operator + `AtlasMigration` CR for `tenant_<id>` schema
+   - Wave 3: PostgREST (after schema exists)
+   - Wave 4: Tenant workloads
+7. Atlas Operator creates deterministic schema: `tenant_<id>` (e.g., `tenant_acme`)
+8. Atlas Operator applies baseline migrations from Git
+9. PostgREST routes requests to `tenant_<id>` schema based on JWT `tenant_id` claim
+
+**Key Principles:**
+- **Deterministic Schema Naming**: `tenant_<id>` enables safe migration replay
+- **GitOps-First**: All state changes via Git commits, ArgoCD reconciles
+- **Sync Waves**: Health checks gate progression (CNPG Ready before Atlas, Atlas Ready before PostgREST)
+- **Drift Detection**: Atlas Operator reconciles Git vs Schema state every 30-60s
+- **Schema Isolation**: PostgREST sets `search_path=tenant_<id>` per request via PgBouncer transaction pooling
+
 ### Phase 1 MVP (Manual Repo Creation)
 1. Platform admin calls MCP tool: `create_tenant`
 2. MCP server validates tenant metadata
 3. MCP server creates tenant record in PostgreSQL
 4. Platform admin manually creates GitHub repos (control + app plane)
-5. MCP server commits tenant descriptor to fleet-registry
-6. ApplicationSets auto-discover and provision
+5. MCP server commits `AINativeSaaS` CR to `fleet-registry/tenants/tenant-<id>.yaml`
+6. ApplicationSets auto-discover and provision via sync waves
 
 ### Phase 2 (Automated Repo Creation)
 1. MCP server creates GitHub repos from templates
@@ -275,7 +325,10 @@ spec:
 
 ### Tenant Isolation
 - **Dedicated Spoke:** 1 tenant = 1 cluster (Enterprise tier)
-- **Shared Spoke:** Multi-tenant control plane, namespace isolation (Starter tier)
+- **Shared Spoke:** Multi-tenant control plane, schema-level isolation (Starter tier)
+- **Schema-Based Isolation:** Each tenant gets deterministic schema `tenant_<id>` in shared CNPG cluster
+- **PostgREST Routing:** Sets `search_path=tenant_<id>` per request based on JWT `tenant_id` claim
+- **PgBouncer Transaction Pooling:** Ensures connection reuse without session state leakage
 - **Dual-Plane Pattern:** Each tenant gets two namespaces:
   - `tenant-{id}-cp` (Control Plane) - labeled with `zero-ops.io/tenant-id` and `zero-ops.io/plane: control`
   - `tenant-{id}-app` (Application Plane) - labeled with `zero-ops.io/tenant-id` and `zero-ops.io/plane: application`
